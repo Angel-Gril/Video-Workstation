@@ -284,14 +284,17 @@ export function Workstation() {
   const speechCacheRef = useRef(new Map<string, SpeechSegment[]>())
   const waveformCacheRef = useRef(new Map<string, number[]>())
   const thumbnailCacheRef = useRef(new Map<string, Thumbnail[]>())
+  const thumbnailLoadingRef = useRef(new Set<string>())
   const visualCacheRef = useRef(new Map<string, VisualSignal[]>())
   const [clipDrag, setClipDrag] = useState<ClipDragState | null>(null)
   const [clipDragPreview, setClipDragPreview] = useState<ClipDragPreview | null>(null)
+  const clipDragPreviewRef = useRef<ClipDragPreview | null>(null)
   const [multiDrag, setMultiDrag] = useState<MultiDragState | null>(null)
   const [multiDragDelta, setMultiDragDelta] = useState(0)
   const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set())
   const selectedClipIdsRef = useRef(selectedClipIds)
   const [snapping, setSnapping] = useState(true)
+  const [snapIndicator, setSnapIndicator] = useState<number | null>(null)
   const [marquee, setMarquee] = useState<MarqueeState | null>(null)
   const [zoom, setZoom] = useState(42)
   const [exporting, setExporting] = useState(false)
@@ -420,6 +423,10 @@ export function Workstation() {
     () => project.timeline.tracks.flatMap((track) => track.clips),
     [project.timeline.tracks]
   )
+  const assetById = useMemo(
+    () => new Map(project.media.map((asset) => [asset.id, asset])),
+    [project.media]
+  )
   const snapPoints = useMemo(() => {
     const points = new Set<number>([0])
     for (const clip of allTimelineClips) {
@@ -430,20 +437,56 @@ export function Workstation() {
     return [...points].filter((value) => Number.isFinite(value) && value >= 0)
   }, [allTimelineClips, duration])
 
-  function snapTime(time: number, ignoreClipIds: string[] = []) {
-    if (!snapping || zoom < 16) return Math.max(0, time)
+  function snapTarget(time: number, ignoreClipIds: string[] = []): number | null {
+    if (!snapping || zoom < 16) {
+      return null
+    }
     const ignored = new Set(ignoreClipIds)
+    const ignoredBoundaries = allTimelineClips
+      .filter((clip) => ignored.has(clip.id))
+      .flatMap((clip) => [clip.timelineStart, clip.timelineStart + clip.duration])
     const targets = [
       ...snapPoints,
       previewTime
-    ].filter((point) => !allTimelineClips.some((clip) =>
-      ignored.has(clip.id) &&
+    ].filter((point) => !ignoredBoundaries.some((boundary) =>
+      Math.abs(point - boundary) < .001
+    ) || allTimelineClips.some((clip) =>
+      !ignored.has(clip.id) &&
       (Math.abs(point - clip.timelineStart) < .001 ||
         Math.abs(point - clip.timelineStart - clip.duration) < .001)
     ))
     const threshold = Math.max(6 / zoom, .035)
     const snapped = targets.find((point) => Math.abs(point - time) <= threshold)
-    return Math.max(0, snapped ?? time)
+    return snapped === undefined ? null : Math.max(0, snapped)
+  }
+
+  function snapTime(time: number, ignoreClipIds: string[] = []) {
+    const snapped = snapTarget(time, ignoreClipIds)
+    setSnapIndicator(snapped)
+    return snapped ?? Math.max(0, time)
+  }
+
+  function clipThumbnails(clip: TimelineClip): Array<{ time: number; dataUrl: string }> {
+    const asset = assetById.get(clip.mediaId)
+    if (!asset) return []
+    return (thumbnails[clip.mediaId] ?? [])
+      .filter((thumbnail) =>
+        thumbnail.time >= clip.sourceStart &&
+        thumbnail.time <= clip.sourceStart + clip.duration
+      )
+      .map((thumbnail) => ({ ...thumbnail, time: thumbnail.time - clip.sourceStart }))
+  }
+
+  function clipWaveform(clip: TimelineClip): number[] {
+    const values = waveforms[clip.mediaId]
+    if (!values?.length) return []
+    const asset = assetById.get(clip.mediaId)
+    const sourceDuration = Math.max(.001, asset?.duration ?? clip.sourceStart + clip.duration)
+    const startRatio = clamp(clip.sourceStart / sourceDuration, 0, 1)
+    const endRatio = clamp((clip.sourceStart + clip.duration) / sourceDuration, startRatio, 1)
+    const first = Math.floor(startRatio * values.length)
+    const last = Math.max(first + 1, Math.ceil(endRatio * values.length))
+    return values.slice(first, last)
   }
 
   const selectedClip = useMemo(() => {
@@ -614,11 +657,14 @@ export function Workstation() {
       setThumbnails((items) => ({ ...items, [asset.id]: cached }))
       return
     }
+    if (thumbnailLoadingRef.current.has(asset.path)) return
+    thumbnailLoadingRef.current.add(asset.path)
     const response = await fetch(`/api/media/thumbnails?path=${encodeURIComponent(asset.path)}&count=10&width=160`)
     const data = await response.json()
     if (!response.ok) throw new Error(data.error ?? '缩略图提取失败')
     thumbnailCacheRef.current.set(asset.path, data.thumbnails)
     setThumbnails((items) => ({ ...items, [asset.id]: data.thumbnails }))
+    thumbnailLoadingRef.current.delete(asset.path)
   }
 
   async function loadVisualSignals(asset: MediaAsset) {
@@ -1399,20 +1445,23 @@ export function Workstation() {
       duration: clip.duration
     })
     setClipDragPreview(null)
+    clipDragPreviewRef.current = null
   }
 
   useEffect(() => {
     if (!clipDrag) return
-    const drag = clipDrag
+      const drag = clipDrag
 
     function moveClip(delta: number) {
       const timelineStart = snapTime(Math.max(0, drag.timelineStart + delta), [drag.clipId])
-      setClipDragPreview({
+      const preview = {
         clipId: drag.clipId,
         timelineStart,
         sourceStart: drag.sourceStart,
         duration: drag.duration
-      })
+      }
+      clipDragPreviewRef.current = preview
+      setClipDragPreview(preview)
     }
 
     function trimClip(delta: number) {
@@ -1424,20 +1473,24 @@ export function Workstation() {
         const minStart = Math.max(0, drag.timelineStart - drag.sourceStart)
         const maxStart = drag.timelineStart + drag.duration - 0.05
         const timelineStart = clamp(drag.timelineStart + delta, minStart, maxStart)
-        setClipDragPreview({
+        const preview = {
           clipId: drag.clipId,
           timelineStart,
           sourceStart: drag.sourceStart + (timelineStart - drag.timelineStart),
           duration: drag.duration
-        })
+        }
+        clipDragPreviewRef.current = preview
+        setClipDragPreview(preview)
         return
       }
-      setClipDragPreview({
+      const preview = {
         clipId: drag.clipId,
         timelineStart: drag.timelineStart,
         sourceStart: drag.sourceStart,
         duration: clamp(drag.duration + delta, 0.05, asset.duration - drag.sourceStart)
-      })
+      }
+      clipDragPreviewRef.current = preview
+      setClipDragPreview(preview)
     }
 
     function handleMove(event: PointerEvent) {
@@ -1449,9 +1502,11 @@ export function Workstation() {
 
     function handleUp(event: PointerEvent) {
       if (event.pointerId !== drag.pointerId) return
-      const preview = clipDragPreview
+      const preview = clipDragPreviewRef.current
       setClipDrag(null)
       setClipDragPreview(null)
+      clipDragPreviewRef.current = null
+      setSnapIndicator(null)
       if (!preview) return
       if (drag.mode === 'move') {
         if (Math.abs(preview.timelineStart - drag.timelineStart) < 0.001) return
@@ -1488,7 +1543,7 @@ export function Workstation() {
       window.removeEventListener('pointerup', handleUp)
       window.removeEventListener('pointercancel', handleUp)
     }
-  }, [clipDrag, clipDragPreview, previewTime, project, snapping, zoom])
+  }, [clipDrag, previewTime, project, snapping, zoom])
 
   useEffect(() => {
     if (!multiDrag) return
@@ -1498,7 +1553,7 @@ export function Workstation() {
       if (event.pointerId !== drag.pointerId) return
       const rawDelta = (event.clientX - drag.originX) / zoom
       const maxBackward = Math.min(...drag.startPositions.map((item) => item.timelineStart))
-      const anchorStart = drag.startPositions.find((item) => item.clipId === drag.anchorId)
+    const anchorStart = drag.startPositions.find((item) => item.clipId === drag.anchorId)
         ?.timelineStart ?? 0
       const desiredAnchor = Math.max(0, anchorStart + rawDelta)
       const snappedAnchor = snapTime(desiredAnchor, drag.clipIds)
@@ -1521,6 +1576,7 @@ export function Workstation() {
         }))
       setMultiDrag(null)
       setMultiDragDelta(0)
+      setSnapIndicator(null)
       if (commands.length === 0) return
       try {
         const batch = batchCommand(project, commands, `移动 ${commands.length} 个片段`)
@@ -2128,7 +2184,7 @@ export function Workstation() {
               <div
                 ref={timelineCanvasRef}
                 className="timeline-canvas"
-                style={{ width: 120 + timelineSpan * zoom + 40 }}
+                style={{ width: `calc(120px + ${timelineSpan * zoom + 40}px)` }}
                 onPointerDown={startMarquee}
               >
                 <div
@@ -2189,16 +2245,21 @@ export function Workstation() {
                             onPointerDown={(event) => handleClipPointerDown(event, clip, 'move')}
                           >
                             <span>{clip.text ? clip.text : clip.narration ? clip.narration : formatTime(view.duration)}</span>
-                            {track.kind === 'video' && thumbnails[clip.mediaId] ? (
+                            {track.kind === 'video' && clipThumbnails(clip).length > 0 ? (
                               <div className="clip-thumbnail-strip">
-                                {thumbnails[clip.mediaId]!.map((thumb) => (
-                                  <img key={`${clip.id}-${thumb.time}`} src={thumb.dataUrl} alt="" />
+                                {clipThumbnails(clip).map((thumb) => (
+                                  <img
+                                    key={`${clip.id}-${thumb.time}`}
+                                    src={thumb.dataUrl}
+                                    alt=""
+                                    style={{ left: `${thumb.time * zoom}px` }}
+                                  />
                                 ))}
                               </div>
                             ) : null}
-                            {(track.kind === 'audio' || track.kind === 'music') && waveforms[clip.mediaId] ? (
+                            {(track.kind === 'audio' || track.kind === 'music') && clipWaveform(clip).length > 0 ? (
                               <div className="clip-waveform" aria-hidden="true">
-                                {waveforms[clip.mediaId]!.map((value, index) => (
+                                {clipWaveform(clip).map((value, index) => (
                                   <span key={`${clip.id}-${index}`} style={{ height: `${Math.max(6, value * 100)}%` }} />
                                 ))}
                               </div>
@@ -2226,8 +2287,15 @@ export function Workstation() {
                       left: Math.min(marquee.originX, marquee.currentX),
                       top: Math.min(marquee.originY, marquee.currentY),
                       width: Math.abs(marquee.currentX - marquee.originX),
-                      height: Math.abs(marquee.currentY - marquee.originY)
-                    }}
+                    height: Math.abs(marquee.currentY - marquee.originY)
+                  }}
+                />
+                ) : null}
+                {snapIndicator !== null ? (
+                  <div
+                    className="snap-indicator"
+                    style={{ left: 120 + snapIndicator * zoom }}
+                    aria-hidden="true"
                   />
                 ) : null}
                 <div className="playhead" style={{ left: 120 + previewTime * zoom }} />

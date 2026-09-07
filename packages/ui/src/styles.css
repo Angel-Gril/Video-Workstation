@@ -359,6 +359,18 @@ h2 { font-size: 12px; color: #c9c9d1; font-weight: 600; }
   pointer-events: none;
 }
 
+.snap-indicator {
+  position: absolute;
+  top: 24px;
+  bottom: 8px;
+  width: 2px;
+  margin-left: -1px;
+  background: #ff5b3f;
+  box-shadow: 0 0 0 1px rgba(255, 91, 63, .32);
+  z-index: 4;
+  pointer-events: none;
+}
+
 .timeline-ruler {
   position: relative;
   margin-left: 120px;
@@ -438,7 +450,7 @@ h2 { font-size: 12px; color: #c9c9d1; font-weight: 600; }
   user-select: none;
 }
 
-.timeline-clip span:not(.clip-handle) {
+.timeline-clip > span:not(.clip-handle) {
   max-width: calc(100% - 14px);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -462,7 +474,8 @@ h2 { font-size: 12px; color: #c9c9d1; font-weight: 600; }
 }
 
 .clip-thumbnail-strip img {
-  width: 24%;
+  position: absolute;
+  width: 60px;
   height: 100%;
   object-fit: cover;
   opacity: .5;
@@ -478,7 +491,9 @@ h2 { font-size: 12px; color: #c9c9d1; font-weight: 600; }
 }
 
 .clip-waveform span {
-  width: 2px;
+  flex: 1 0 auto;
+  min-width: 1px;
+  max-width: 3px;
   background: #77788a;
 }
 

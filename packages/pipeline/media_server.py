@@ -307,13 +307,23 @@ def audio_waveform(path: Path, points: int = 900) -> list[float]:
         data = raw.read_bytes()
     if not data:
         return []
+    asset = probe(path)
+    duration = max(0.1, float(asset["duration"]))
+    sample_rate = 8000
+    bytes_per_second = sample_rate * 2
     chunk = max(2, len(data) // (points * 2))
     normalized = []
+    cursor = 0.0
+    step_seconds = chunk / bytes_per_second
     for start in range(0, len(data) - 1, chunk * 2):
         sample = data[start:start + chunk * 2]
         peak = max(abs(int.from_bytes(sample[index:index + 2], byteorder="little", signed=True))
                    for index in range(0, len(sample) - 1, 2))
         normalized.append(min(1.0, peak / 32768.0))
+        cursor += step_seconds
+    # The raw file can include a short tail after ffprobe's container duration.
+    # Keep those bars out so source-time based clip rendering stays accurate.
+    normalized = normalized[:max(1, math.ceil(duration / step_seconds))]
     if len(normalized) > points:
         step = len(normalized) / points
         return [normalized[int(index * step)] for index in range(points)]

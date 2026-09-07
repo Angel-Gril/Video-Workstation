@@ -22,3 +22,17 @@ debug-loaded.png
 .vite-playwright-mobile.mjs
 .vite-e2e.mjs
 .vite-timeline-e2e.mjs
+.vite-multi-select-e2e.mjs
+.vite-visual-qa.mjs
+.vite-snap-e2e.mjs
+inspect-dom.mjs
+snap-debug.mjs
+snap-values.mjs
+timeline-thumbs.png
+workstation-multiselect.png
+multiselect-failure.png
+snap-*.png
+timeline-scrolled.png
+timeline-snap-debug.png
+timeline-snap.png
+timeline-waveforms.png
