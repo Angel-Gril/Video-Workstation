@@ -32,6 +32,7 @@ import {
 
 type PlannerGoal = 'summary' | 'highlights' | 'tutorial'
 type ExportQuality = 'fast' | 'balanced' | 'quality'
+type MetadataFormat = 'fcpxml' | 'jianying'
 type ClipDragMode = 'move' | 'trim-start' | 'trim-end'
 
 interface Thumbnail {
@@ -289,6 +290,7 @@ export function Workstation() {
   const [multiDrag, setMultiDrag] = useState<MultiDragState | null>(null)
   const [multiDragDelta, setMultiDragDelta] = useState(0)
   const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set())
+  const selectedClipIdsRef = useRef(selectedClipIds)
   const [snapping, setSnapping] = useState(true)
   const [marquee, setMarquee] = useState<MarqueeState | null>(null)
   const [zoom, setZoom] = useState(42)
@@ -300,6 +302,10 @@ export function Workstation() {
   const [message, setMessage] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
   const projectFileRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    selectedClipIdsRef.current = selectedClipIds
+  }, [selectedClipIds])
 
   useEffect(() => {
     fetch('/api/health')
@@ -1122,7 +1128,7 @@ export function Workstation() {
 
   function startMultiDrag(event: React.PointerEvent, clip: TimelineClip): boolean {
     const draggable = allTimelineClips.filter((item) =>
-      selectedClipIds.has(item.id) &&
+      selectedClipIdsRef.current.has(item.id) &&
       !project.timeline.tracks.find((track) => track.id === item.trackId)?.locked
     )
     if (draggable.length < 2) return false
@@ -1353,7 +1359,7 @@ export function Workstation() {
     if (!asset || asset.duration <= 0) return
     event.preventDefault()
     event.stopPropagation()
-    if (mode === 'move' && selectedClipIds.has(clip.id) && startMultiDrag(event, clip)) return
+    if (mode === 'move' && selectedClipIdsRef.current.has(clip.id) && startMultiDrag(event, clip)) return
     setSelectedClipId(clip.id)
     setPreviewSource({ mode: 'timeline', mediaId: clip.mediaId })
     setPreviewTime(clip.timelineStart)
@@ -1570,21 +1576,31 @@ export function Workstation() {
     if (additive) {
       event.preventDefault()
       event.stopPropagation()
-      const next = new Set(selectedClipIds)
-      if (next.has(clip.id)) {
-        next.delete(clip.id)
-      } else {
-        next.add(clip.id)
-      }
-      setSelectedClipIds(next)
-      setSelectedClipId(next.has(clip.id) ? clip.id : null)
-      if (next.has(clip.id)) {
-        setPreviewSource({ mode: 'timeline', mediaId: clip.mediaId })
-        setPreviewTime(clip.timelineStart)
-      }
+      setSelectedClipIds((current) => {
+        const next = new Set(current)
+        if (next.has(clip.id)) {
+          next.delete(clip.id)
+        } else {
+          next.add(clip.id)
+        }
+        return next
+      })
+      setSelectedClipId((current) => (current === clip.id ? null : clip.id))
+      setPreviewSource({ mode: 'timeline', mediaId: clip.mediaId })
+      setPreviewTime(clip.timelineStart)
       return
     }
-    if (mode === 'move') setSelectedClipIds(new Set())
+    if (mode === 'move') {
+      const extendsSelection = selectedClipIdsRef.current.has(clip.id)
+      if (!extendsSelection) {
+        selectedClipIdsRef.current = new Set([clip.id])
+        setSelectedClipIds(selectedClipIdsRef.current)
+      }
+      startClipDrag(event, clip, mode)
+      return
+    }
+    selectedClipIdsRef.current = new Set([clip.id])
+    setSelectedClipIds(selectedClipIdsRef.current)
     startClipDrag(event, clip, mode)
   }
 
@@ -1644,7 +1660,7 @@ export function Workstation() {
       .catch((error) => setMessage(error instanceof Error ? error.message : '项目打开失败'))
   }
 
-  async function exportProject() {
+  async function exportProject(format: 'mp4' | MetadataFormat = 'mp4') {
     try {
       const issues = validateProject(project)
       if (issues.length > 0) throw new Error(issues[0]!.message)
@@ -1659,13 +1675,20 @@ export function Workstation() {
       }
       setExporting(true)
       setExportProgress(0)
-      const response = await fetch('/api/export', {
+      const endpoint = format === 'mp4' ? '/api/export' : '/api/export/metadata'
+      const requested = exportName.trim() || `exports/${Date.now()}.${format}`
+      const output = format === 'mp4'
+        ? requested
+        : `${requested.replace(/\.(mp4|fcpxml|json)$/i, '')}.${format === 'fcpxml' ? 'fcpxml' : 'json'}`
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          plan: { ...exportPlan, quality: exportQualityMap[exportQuality] },
-          output: exportName.trim() || `exports/${Date.now()}.mp4`
-        })
+        body: JSON.stringify(format === 'mp4'
+          ? {
+            plan: { ...exportPlan, quality: exportQualityMap[exportQuality] },
+            output
+          }
+          : { plan: exportPlan, kind: format, output })
       })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error ?? '导出失败')
@@ -1743,6 +1766,7 @@ export function Workstation() {
     : null
   const selectedSpeech = selectedAsset ? speechByAsset.get(selectedAsset.id) ?? [] : speechSegments
   const selectedScenes = selectedAsset ? scenesByAsset.get(selectedAsset.id) ?? [] : []
+  const selectedVisual = selectedAsset ? visualByAsset.get(selectedAsset.id) ?? [] : []
 
   return (
     <div className="workstation">
@@ -1782,7 +1806,7 @@ export function Workstation() {
             }}
             className="hidden-file"
           />
-          <button onClick={() => void exportProject()} disabled={exporting || serviceOnline === false}>
+          <button onClick={() => void exportProject('mp4')} disabled={exporting || serviceOnline === false}>
             {exporting ? (exportProgress === null ? '导出中' : `${Math.round(exportProgress * 100)}%`) : '导出'}
           </button>
           <span className={serviceOnline ? 'service online' : 'service offline'}>
@@ -1889,6 +1913,16 @@ export function Workstation() {
                   <button onClick={() => { if (selectedAsset) addSceneToTimeline(selectedAsset, scene) }}>加入</button>
                 </div>
               ))}
+              {selectedVisual.length > 0 ? (
+                <div className="visual-summary">
+                  <strong>画面信号</strong>
+                  <span>
+                    平均运动 {(selectedVisual.reduce((total, item) => total + item.motion, 0) / selectedVisual.length).toFixed(2)} ·
+                    亮度 {(selectedVisual.reduce((total, item) => total + item.brightness, 0) / selectedVisual.length).toFixed(2)} ·
+                    饱和度 {(selectedVisual.reduce((total, item) => total + item.saturation, 0) / selectedVisual.length).toFixed(2)}
+                  </span>
+                </div>
+              ) : null}
               {selectedSpeech.length === 0 && selectedScenes.length === 0 ? (
                 <p className="empty">选择素材并点击“分析”</p>
               ) : null}
@@ -2100,8 +2134,7 @@ export function Workstation() {
                         <button className={track.locked ? 'active' : ''} onClick={() => toggleTrackState(track, 'locked')} title="锁定">L</button>
                       </div>
                     </div>
-                    <div className="track-body" style={{ width: timelineSpan * zoom }}>
-                      <div data-track-id={track.id} style={{ display: 'contents' }} />
+                    <div className="track-body" data-track-id={track.id} style={{ width: timelineSpan * zoom }}>
                       {track.clips.map((clip) => {
                         const singlePreview = clipDragPreview?.clipId === clip.id ? clipDragPreview : null
                         const multiPreview = multiDrag && selectedClipIds.has(clip.id)
@@ -2116,6 +2149,7 @@ export function Workstation() {
                         return (
                           <div
                             key={clip.id}
+                            data-clip-id={clip.id}
                             className={[
                               'timeline-clip',
                               clip.id === selectedClipId ? 'selected' : '',
@@ -2431,6 +2465,11 @@ export function Workstation() {
             <p className="export-note">
               解说混音：自动避让{narrationDucking ? '开启' : '关闭'}；解说在时间线中的音量单独生效。
             </p>
+            <div className="export-grid">
+              <button onClick={() => void exportProject('mp4')} disabled={exporting || serviceOnline === false}>MP4</button>
+              <button onClick={() => void exportProject('fcpxml')} disabled={exporting}>FCPXML</button>
+              <button onClick={() => void exportProject('jianying')} disabled={exporting}>剪映草稿</button>
+            </div>
           </section>
         </aside>
       </main>
