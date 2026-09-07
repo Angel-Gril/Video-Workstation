@@ -48,6 +48,7 @@ export interface StorySegment {
   factors: PlanFactor[]
   reasons: string[]
   transcript: string
+  narration?: string | undefined
 }
 
 export interface PlanFactor {
@@ -68,6 +69,7 @@ export interface PlanStrategy {
 export interface PlannerOptions {
   videoTrackId?: string
   captionTrackId?: string
+  narrationTrackId?: string
   strategyId?: PlanStrategy['id']
 }
 

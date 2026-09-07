@@ -113,6 +113,24 @@ function makeReasons(candidate: Candidate, factors: PlanFactor[]): string[] {
   return reasons
 }
 
+function buildNarration(
+  goal: PlannerInput['goal'],
+  candidate: Candidate,
+  keywords: string[],
+  index: number
+): string {
+  const spoken = candidate.transcript.replace(/\s+/g, ' ').trim()
+  const focus = keywords.find((keyword) => candidate.matchedKeywords.includes(keyword))
+  const lead = goal === 'highlights'
+    ? `第 ${index + 1} 段高光，`
+    : goal === 'tutorial'
+      ? `接下来看第 ${index + 1} 部分，`
+      : `第 ${index + 1} 部分，`
+  if (!spoken) return `${lead}这一段画面变化明显，建议单独确认细节。`
+  const compact = spoken.length > 38 ? `${spoken.slice(0, 37)}…` : spoken
+  return `${lead}${focus ? `${focus}相关内容：` : ''}${compact}`
+}
+
 function candidateWindows(input: PlannerInput): Candidate[] {
   const scenes = [...input.scenes].sort((a, b) => a.start - b.start)
   const windows = scenes.length > 0
@@ -131,8 +149,8 @@ function candidateWindows(input: PlannerInput): Candidate[] {
         visualScore: 0
       }))
 
-  const instruction = (input.instruction ?? '').toLowerCase()
-  const keywords = instruction
+  const keywords = (input.instruction ?? '')
+    .toLowerCase()
     .split(/[\s,，。;；]+/)
     .filter((keyword) => keyword.length > 1)
 
@@ -189,6 +207,10 @@ function selectSegments(
   weights: PlanStrategy['weights']
 ): { segments: StorySegment[]; selectedIds: string[] } {
   const target = clampNumber(input.targetSeconds, 1, 3600)
+  const keywords = (input.instruction ?? '')
+    .toLowerCase()
+    .split(/[\s,，。;；]+/)
+    .filter((keyword) => keyword.length > 1)
   const scored = [...candidates]
     .map((candidate) => {
       const factors = makeFactors(candidate, weights)
@@ -240,7 +262,8 @@ function selectSegments(
       score: Number(item.score.toFixed(3)),
       factors: item.factors,
       reasons: makeReasons(item.candidate, item.factors),
-      transcript: item.candidate.transcript
+      transcript: item.candidate.transcript,
+      narration: buildNarration(input.goal, item.candidate, keywords, index)
     }))
 
   return { segments, selectedIds: segments.map((segment) => segment.id) }
@@ -262,6 +285,7 @@ function commandsForSegments(
   const commands: PlanCommand[] = []
   let outputTime = 0
   let captionIndex = 0
+  let narrationTime = 0
 
   for (const segment of segments) {
     const duration = segment.source.end - segment.source.start
@@ -306,6 +330,30 @@ function commandsForSegments(
       }, commands.length))
     }
 
+    if (options.narrationTrackId) {
+      narrationTime = Math.max(narrationTime, outputTime)
+      commands.push(command({
+        kind: 'clip.add',
+        payload: {
+          clip: {
+            id: `plan-narration-${segment.id}`,
+            trackId: options.narrationTrackId,
+            mediaId: `pending-tts:${segment.id}`,
+            sourceStart: 0,
+            timelineStart: Number(narrationTime.toFixed(3)),
+            duration: Number(duration.toFixed(3)),
+            transform: transform(),
+            effects: [],
+            text: segment.narration,
+            narration: segment.narration,
+            narrationPending: true,
+            volume: 1.15
+          }
+        }
+      }, commands.length))
+      narrationTime += duration
+    }
+
     outputTime += duration
   }
 
@@ -318,7 +366,7 @@ export function createNarrativePlan(
 ): NarrativePlan {
   const resolvedOptions: PlannerOptions = {
     videoTrackId: options.videoTrackId ?? 'track-video',
-    captionTrackId: options.captionTrackId ?? 'track-caption'
+    captionTrackId: options.captionTrackId ?? 'track-caption',
   }
   const strategies = planStrategies.map((strategy) => ({
     ...strategy,

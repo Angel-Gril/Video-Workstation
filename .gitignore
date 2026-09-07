@@ -5,6 +5,8 @@ dist/
 __pycache__/
 sample.mp4
 exports/
+.venv/
+narration-ui.png
 .aiwork/
 workstation.png
 workstation-mobile.png

@@ -64,6 +64,9 @@ export interface TimelineClip {
   transitionOut?: TransitionKind | undefined
   narration?: string | undefined
   narrationPath?: string | undefined
+  narrationPending?: boolean | undefined
+  narrationVoice?: string | undefined
+  narrationRate?: string | undefined
 }
 
 export interface Track {
@@ -90,8 +93,20 @@ export interface ProjectMeta {
   frameRate: number
 }
 
+export interface NarrationSettings {
+  voice?: string | undefined
+  rate?: string | undefined
+  audioDucking?: {
+    enabled?: boolean | undefined
+    gain?: number | undefined
+    attack?: number | undefined
+    release?: number | undefined
+  } | undefined
+}
+
 export interface Project {
   meta: ProjectMeta
+  narrationSettings?: NarrationSettings | undefined
   media: MediaAsset[]
   timeline: Timeline
 }

@@ -15,10 +15,22 @@ export interface ExportPlanEntry {
   effects?: TimelineClip['effects']
   transitionIn?: TimelineClip['transitionIn']
   transitionOut?: TimelineClip['transitionOut']
+  narration?: string
+  narrationPending?: boolean
+  narrationVoice?: string
+  narrationRate?: string
 }
 
 export interface ExportPlan {
   meta: Project['meta']
+  narrationVoice?: string | undefined
+  narrationRate?: string | undefined
+  audioDucking?: {
+    enabled?: boolean | undefined
+    gain?: number | undefined
+    attack?: number | undefined
+    release?: number | undefined
+  } | undefined
   video: ExportPlanEntry[]
   audio: ExportPlanEntry[]
   caption: ExportPlanEntry[]
@@ -46,6 +58,10 @@ export function clipToPlanEntry(project: Project, clip: TimelineClip): ExportPla
   if (clip.effects.length > 0) entry.effects = clip.effects
 
   if (clip.text !== undefined) entry.text = clip.text
+  if (clip.narration !== undefined) entry.narration = clip.narration
+  if (clip.narrationPending) entry.narrationPending = true
+  if (clip.narrationVoice !== undefined) entry.narrationVoice = clip.narrationVoice
+  if (clip.narrationRate !== undefined) entry.narrationRate = clip.narrationRate
   return entry
 }
 
@@ -69,6 +85,9 @@ export function createTimelinePlan(project: Project): ExportPlan {
 
   return {
     meta: project.meta,
+    narrationVoice: project.narrationSettings?.voice,
+    narrationRate: project.narrationSettings?.rate,
+    audioDucking: project.narrationSettings?.audioDucking,
     video: empty.video,
     audio: empty.audio,
     caption: empty.caption,

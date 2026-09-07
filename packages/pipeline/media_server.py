@@ -35,6 +35,7 @@ PROJECT_FILE = Path(".aiwork/current.aiwork.json")
 WHISPER_MODEL_NAME = "base"
 TTS_VOICE = os.environ.get("WORKSTATION_TTS_VOICE", "zh-CN-XiaoxiaoNeural")
 TTS_RATE = os.environ.get("WORKSTATION_TTS_RATE", "+0%")
+TTS_OUTPUT_DIR = Path(os.environ.get("WORKSTATION_TTS_DIR", ".aiwork/tts")).resolve()
 whisper_lock = threading.Lock()
 whisper_model: Any | None = None
 jobs: dict[str, dict[str, Any]] = {}
@@ -114,15 +115,25 @@ def scene_analysis(path: Path, threshold: float) -> dict[str, Any]:
     return {"asset": asset, "scenes": normalized}
 
 
-def tts_synthesis(text: str, output: Path | None = None) -> dict[str, Any]:
+def tts_synthesis(
+    text: str,
+    output: Path | None = None,
+    voice: str | None = None,
+    rate: str | None = None,
+) -> dict[str, Any]:
     clean = text.strip()
     if not clean:
         raise PipelineError("TTS text is required")
     if not output:
-        output = Path(tempfile.gettempdir()) / f"video-workstation-tts-{uuid.uuid4().hex}.mp3"
+        TTS_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        output = TTS_OUTPUT_DIR / f"narration-{uuid.uuid4().hex}.mp3"
     output.parent.mkdir(parents=True, exist_ok=True)
+    clean_voice = (voice or TTS_VOICE).strip() or TTS_VOICE
+    clean_rate = (rate or TTS_RATE).strip() or TTS_RATE
+    if not re.fullmatch(r"[-+]\d{1,3}%", clean_rate):
+        raise PipelineError("TTS rate must use a percent format such as +10%")
     command = [
-        "edge-tts", "--voice", TTS_VOICE, "--rate", TTS_RATE,
+        "edge-tts", "--voice", clean_voice, "--rate", clean_rate,
         "--text", clean, "--write-media", str(output)
     ]
     result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
@@ -133,7 +144,33 @@ def tts_synthesis(text: str, output: Path | None = None) -> dict[str, Any]:
         raise PipelineError(detail[-2000:] or "TTS synthesis failed")
     if not output.exists() or output.stat().st_size == 0:
         raise PipelineError("TTS synthesis produced an empty file")
-    return {**probe(output), "narration": clean}
+    result = probe(output)
+    return {
+        **result,
+        "name": output.stem,
+        "path": str(output.resolve()),
+        "narration": clean,
+        "voice": clean_voice,
+        "rate": clean_rate,
+    }
+
+
+def narration_drafts(plan: dict[str, Any], max_chars: int = 90) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for clip in plan.get("audio", []):
+        text = str(clip.get("narration", "") or "").strip()
+        if not clip.get("narrationPending", False) or not text:
+            continue
+        entries.append({
+            "clipId": clip.get("id"),
+            "timelineStart": max(0.0, float(clip.get("timelineStart", 0))),
+            "duration": max(0.05, float(clip.get("duration", 1))),
+            "text": text[:max_chars],
+            "voice": str(clip.get("narrationVoice", "") or plan.get("narrationVoice", "")),
+            "rate": str(clip.get("narrationRate", "") or plan.get("narrationRate", "")),
+        })
+    entries.sort(key=lambda item: item["timelineStart"])
+    return entries
 
 
 def audio_waveform(path: Path, points: int = 900) -> list[float]:
@@ -471,6 +508,7 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
     video_clips = [clip for clip in plan.get("video", []) if clip.get("path")]
     audio_clips = [clip for clip in plan.get("audio", []) if clip.get("path")]
     music_clips = [clip for clip in plan.get("music", []) if clip.get("path")]
+    narration_clips = [clip for clip in plan.get("audio", []) if clip.get("narrationPending", False)]
     if not video_clips and not audio_clips and not music_clips:
         raise PipelineError("Export plan has no usable clips")
 
@@ -512,6 +550,33 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
         index for index in range(input_offset, input_offset + len(music_clips))
         if not music_clips[index - input_offset].get("muted", False)
     ]
+
+    ducking = plan.get("audioDucking", {}) if isinstance(plan.get("audioDucking", {}), dict) else {}
+    ducking_enabled = bool(ducking.get("enabled", True)) and narration_clips and (audio_stream_inputs or music_audio_inputs)
+    narration_ranges = [
+        (
+            max(0.0, float(clip.get("timelineStart", 0))),
+            max(0.05, float(clip.get("timelineStart", 0)) + float(clip.get("duration", 0))),
+        )
+        for clip in narration_clips
+    ]
+
+    def ducking_expression() -> str:
+        gain = clamp(float(ducking.get("gain", .3)), 0, 1)
+        attack = max(.01, min(1.0, float(ducking.get("attack", .16))))
+        release = max(.05, min(3.0, float(ducking.get("release", .45))))
+        parts: list[str] = []
+        for start, end in narration_ranges:
+            parts.append(f"if(between(t,{start:.3f},{end:.3f}),{gain:.3f},")
+            parts.append(
+                f"if(lt(t,{start:.3f}),1-max(0,({start:.3f}-t)/{attack:.3f})*{1 - gain:.3f},"
+                f"1-min(max((t-{end:.3f}),0)/{release:.3f},1)*{1 - gain:.3f})"
+            )
+            parts.append(")")
+        return "".join(parts) if parts else "1"
+
+    def background_ducking_expression() -> str:
+        return ducking_expression() if ducking_enabled else "1"
 
     audio_mixin_inputs = audio_stream_inputs + independent_audio_inputs + music_audio_inputs
 
@@ -683,10 +748,11 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
                     gain_expr = f"min({fade_parts[0]},{fade_parts[1]})"
                 else:
                     gain_expr = "1"
-                filters.append(f"[mix{index}]volume='{gain_expr}':eval=frame[amix{index}]")
-                audio_mixin_labels[index] = f"[amix{index}]"
+                gain_expr = f"min({gain_expr},{background_ducking_expression()})"
             else:
-                audio_mixin_labels[index] = f"[mix{index}]"
+                gain_expr = background_ducking_expression()
+            filters.append(f"[mix{index}]volume='{escape_filter_commas(gain_expr)}':eval=frame[amix{index}]")
+            audio_mixin_labels[index] = f"[amix{index}]"
         mix_labels = "".join(audio_mixin_labels[index] for index in audio_mixin_inputs)
         if len(audio_mixin_inputs) == 1:
             filters.append(f"{mix_labels}anull[a]")
@@ -697,7 +763,7 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
         "-filter_complex", ";".join(filters),
         *map_args,
         "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
-        "-c:a", "aac", "-b:a", "192k", str(output)
+        "-c:a", "aac", "-b:a", "192k", "-shortest", str(output)
     ])
     output.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.Popen(
@@ -960,8 +1026,19 @@ class MediaHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/tts":
                 text = str(body.get("text", ""))
                 output = body.get("output")
-                result = tts_synthesis(text, Path(output).expanduser().resolve() if output else None)
+                result = tts_synthesis(
+                    text,
+                    Path(str(output)).expanduser().resolve() if output else None,
+                    str(body.get("voice", "")) or None,
+                    str(body.get("rate", "")) or None,
+                )
                 self.send_json(HTTPStatus.OK, result)
+                return
+            if parsed.path == "/api/narration/drafts":
+                plan = body.get("plan")
+                if not isinstance(plan, dict):
+                    raise BadRequestError("Export plan is required")
+                self.send_json(HTTPStatus.OK, {"drafts": narration_drafts(plan)})
                 return
             self.send_error_json(HTTPStatus.NOT_FOUND, "Not found")
         except PipelineError as error:
