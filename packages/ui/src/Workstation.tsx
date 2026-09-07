@@ -101,6 +101,20 @@ const trackDefaults: Array<Omit<Track, 'clips' | 'id'>> = [
   { kind: 'caption', locked: false, muted: false, hidden: false }
 ]
 
+const narrationVoices = [
+  { id: 'zh-CN-XiaoxiaoNeural', label: '晓晓 · 自然' },
+  { id: 'zh-CN-YunxiNeural', label: '云希 · 年轻' },
+  { id: 'zh-CN-YunyangNeural', label: '云扬 · 专业' },
+  { id: 'zh-CN-liaoning-XiaobeiNeural', label: '小北 · 东北' }
+]
+
+const narrationRates = [
+  { id: '-10%', label: '慢速' },
+  { id: '+0%', label: '标准' },
+  { id: '+15%', label: '轻快' },
+  { id: '+30%', label: '快速' }
+]
+
 function makeInitialProject(): Project {
   return {
     meta: {
@@ -111,6 +125,11 @@ function makeInitialProject(): Project {
       width: 1920,
       height: 1080,
       frameRate: 30
+    },
+    narrationSettings: {
+      voice: 'zh-CN-XiaoxiaoNeural',
+      rate: '+0%',
+      audioDucking: { enabled: true, gain: .3, attack: .16, release: .45 }
     },
     media: [],
     timeline: {
@@ -143,8 +162,16 @@ function withDefaultTracks(project: Project): Project {
 }
 
 function normalizeTransforms(project: Project): Project {
-  return {
+  const normalized: Project = {
     ...project,
+    narrationSettings: {
+      ...makeInitialProject().narrationSettings,
+      ...project.narrationSettings,
+      audioDucking: {
+        ...makeInitialProject().narrationSettings?.audioDucking,
+        ...project.narrationSettings?.audioDucking
+      }
+    },
     timeline: {
       ...project.timeline,
       tracks: project.timeline.tracks.map((track) => ({
@@ -157,6 +184,7 @@ function normalizeTransforms(project: Project): Project {
       }))
     }
   }
+  return normalized
 }
 
 function uid(prefix: string): string {
@@ -223,6 +251,9 @@ export function Workstation() {
   const [thumbnails, setThumbnails] = useState<Record<string, Thumbnail[]>>({})
   const [generatingNarration, setGeneratingNarration] = useState(false)
   const [narrationText, setNarrationText] = useState('')
+  const [narrationVoice, setNarrationVoice] = useState(narrationVoices[0]!.id)
+  const [narrationRate, setNarrationRate] = useState(narrationRates[1]!.id)
+  const [narrationDucking, setNarrationDucking] = useState(true)
   const [previewSource, setPreviewSource] = useState<PreviewSource>({ mode: 'media', mediaId: null })
   const [previewTime, setPreviewTime] = useState(0)
   const [playing, setPlaying] = useState(false)
@@ -260,6 +291,9 @@ export function Workstation() {
         }))
         const restored = normalizeTransforms(withDefaultTracks(saved.project))
         setProjectState(restored)
+        setNarrationVoice(restored.narrationSettings?.voice ?? narrationVoices[0]!.id)
+        setNarrationRate(restored.narrationSettings?.rate ?? narrationRates[1]!.id)
+        setNarrationDucking(restored.narrationSettings?.audioDucking?.enabled ?? true)
         setHistory(saved.history)
         setFuture(saved.future)
         setPreviewSource({ mode: 'media', mediaId: restored.media[0]?.id ?? null })
@@ -318,6 +352,22 @@ export function Workstation() {
     const next = updateMetaTime({ ...project, meta: { ...project.meta, ...patch } })
     dispatch({
       id: uid('cmd-meta'),
+      kind: 'project.set',
+      payload: { project: next }
+    }, next)
+    setMessage(label)
+  }
+
+  function updateNarrationSettings(patch: Project['narrationSettings'], label: string) {
+    const next = updateMetaTime({
+      ...project,
+      narrationSettings: {
+        ...project.narrationSettings,
+        ...patch
+      }
+    })
+    dispatch({
+      id: uid('cmd-narration'),
       kind: 'project.set',
       payload: { project: next }
     }, next)
@@ -654,14 +704,16 @@ export function Workstation() {
       const response = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text })
+        body: JSON.stringify({ text, voice: narrationVoice, rate: narrationRate })
       })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error ?? '语音合成失败')
       const asset: MediaAsset = { ...data, id: uid('media') }
       const clip: TimelineClip = {
         ...makeClip(asset, track.id, duration),
-        narration: text
+        narration: text,
+        narrationVoice,
+        narrationRate
       }
       const commands: Command[] = [
         { id: uid('cmd-media'), kind: 'media.add', payload: { asset } },
@@ -790,6 +842,7 @@ export function Workstation() {
         instruction: instruction.trim() || undefined
       }, { strategyId: planStrategy })
       setPlan(generated)
+      setNarrationText(generated.segments.map((segment) => segment.narration).filter(Boolean).join('\n'))
       setReviewedSegmentIds(new Set())
       setMessage(generated.segments.length
         ? `已生成 ${generated.segments.length} 个候选：${scenes.length} 个场景 / ${transcript.length} 段语音`
@@ -830,18 +883,33 @@ export function Workstation() {
     setReviewedSegmentIds(new Set(all))
   }
 
+  function generateDraftNarrations() {
+    if (!plan || plan.selectedIds.length === 0) {
+      setMessage('请先生成并采纳剪辑方案')
+      return
+    }
+    const text = plan.segments
+      .filter((segment) => plan.selectedIds.includes(segment.id))
+      .map((segment) => segment.narration)
+      .filter(Boolean)
+      .join('\n')
+    setNarrationText(text)
+    setMessage('已根据方案生成解说草稿')
+  }
+
   function clearPlan() {
     setPlan(null)
     setReviewedSegmentIds(new Set())
   }
 
-  function applyPlan() {
+  async function applyPlan() {
     if (!plan) return
     try {
       const plannedClips = plan.commands.flatMap((item) => {
         const clip = item.payload.clip as TimelineClip | undefined
         return clip ? [clip] : []
       })
+      const pendingNarrations = plannedClips.filter((clip) => clip.narrationPending)
       const removals: Command[] = []
       for (const track of project.timeline.tracks) {
         for (const clip of track.clips) {
@@ -860,14 +928,69 @@ export function Workstation() {
         }
       }
       const commands = [...removals, ...plan.commands as Command[]]
-      const next = commands.reduce(applyCommand, project)
-      dispatch(batchCommand(project, commands, '应用 AI 剪辑方案'), updateMetaTime(next))
-      const firstPlanned = plannedClips[0]
+      if (pendingNarrations.length > 0) {
+        try {
+          const narrationTrack = firstTrack('audio')
+          if (!narrationTrack) throw new Error('没有可用解说轨')
+          const narrationCommands: Command[] = []
+          for (const draft of pendingNarrations) {
+            const response = await fetch('/api/tts', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                text: draft.narration,
+                voice: draft.narrationVoice ?? narrationVoice,
+                rate: draft.narrationRate ?? narrationRate
+              })
+            })
+            const data = await response.json()
+            if (!response.ok) throw new Error(data.error ?? '语音合成失败')
+            const asset: MediaAsset = { ...data, id: uid('media') }
+            const clip: TimelineClip = {
+              ...draft,
+              id: uid('clip-narration'),
+              trackId: narrationTrack.id,
+              mediaId: asset.id,
+              narrationPath: asset.path,
+              narrationPending: false,
+              volume: draft.volume || 1.15
+            }
+            narrationCommands.push(
+              { id: uid('cmd-media'), kind: 'media.add', payload: { asset } },
+              { id: uid('cmd-clip'), kind: 'clip.add', payload: { clip } }
+            )
+            void loadWaveform(asset).catch(() => undefined)
+          }
+          const executable = [...commands.filter((command) => command.kind !== 'clip.add' || !((command.payload.clip as TimelineClip | undefined)?.narrationPending)), ...narrationCommands]
+          const next = executable.reduce(applyCommand, project)
+          dispatch(batchCommand(project, executable, '应用 AI 剪辑方案并生成解说'), updateMetaTime(next))
+          setSpeechSegments((items) => [
+            ...items,
+            ...narrationCommands
+              .filter((command) => command.kind === 'media.add')
+              .map((command) => command.payload.asset as MediaAsset)
+              .map((asset, index) => ({
+                id: uid('speech'),
+                mediaId: asset.id,
+                start: 0,
+                end: asset.duration,
+                text: pendingNarrations[index]?.narration ?? '',
+                language: 'zh-CN'
+              }))
+          ])
+        } catch (error) {
+          setMessage(error instanceof Error ? error.message : '方案解说生成失败')
+        }
+      } else {
+        const next = commands.reduce(applyCommand, project)
+        dispatch(batchCommand(project, commands, '应用 AI 剪辑方案'), updateMetaTime(next))
+      }
+      const firstPlanned = plannedClips.find((clip) => !clip.narrationPending)
       if (firstPlanned) {
         setPreviewSource({ mode: 'timeline', mediaId: firstPlanned.mediaId })
         setPreviewTime(firstPlanned.timelineStart)
       }
-      setMessage(`方案已应用：${plannedClips.length} 个视频片段`)
+      setMessage(`方案已应用：${plannedClips.length - pendingNarrations.length} 个视频片段 / ${pendingNarrations.length} 条解说`)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '方案应用失败')
     }
@@ -1524,6 +1647,43 @@ export function Workstation() {
               />
             </label>
             <label className="field">
+              <span>解说声音</span>
+              <select value={narrationVoice} onChange={(event) => {
+                const voice = event.target.value
+                setNarrationVoice(voice)
+                updateNarrationSettings({ voice }, '解说声音已更新')
+              }}>
+                {narrationVoices.map((voice) => (
+                  <option key={voice.id} value={voice.id}>{voice.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>解说语速</span>
+              <select value={narrationRate} onChange={(event) => {
+                const rate = event.target.value
+                setNarrationRate(rate)
+                updateNarrationSettings({ rate }, '解说语速已更新')
+              }}>
+                {narrationRates.map((rate) => (
+                  <option key={rate.id} value={rate.id}>{rate.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>自动避让</span>
+              <select value={narrationDucking ? 'on' : 'off'} onChange={(event) => {
+                const enabled = event.target.value === 'on'
+                setNarrationDucking(enabled)
+                updateNarrationSettings({
+                  audioDucking: { ...project.narrationSettings?.audioDucking, enabled }
+                }, '解说混音避让已更新')
+              }}>
+                <option value="on">开启</option>
+                <option value="off">关闭</option>
+              </select>
+            </label>
+            <label className="field">
               <span>解说文本</span>
               <textarea
                 value={narrationText}
@@ -1538,6 +1698,9 @@ export function Workstation() {
               disabled={generatingNarration || serviceOnline === false}
             >
               {generatingNarration ? '生成中' : '生成解说语音'}
+            </button>
+            <button className="wide" onClick={generateDraftNarrations} disabled={!plan || plan.selectedIds.length === 0}>
+              从方案生成解说
             </button>
             <button className="wide" onClick={() => void analyzeAllMedia()} disabled={analyzing}>
               {analysisLabel || '重新分析全部素材'}
@@ -1696,7 +1859,7 @@ export function Workstation() {
           <section className="panel-section">
             <div className="section-head">
               <h2>方案审核</h2>
-              <button onClick={applyPlan} disabled={!plan || plan.selectedIds.length === 0}>应用</button>
+              <button onClick={() => void applyPlan()} disabled={!plan || plan.selectedIds.length === 0}>应用</button>
             </div>
             {plan ? (
               <>
@@ -1731,6 +1894,9 @@ export function Workstation() {
                         <p className="plan-transition">
                           转场建议：{transitionLabel(segment.transition)}
                         </p>
+                        {segment.narration ? (
+                          <p className="plan-narration">解说：{segment.narration}</p>
+                        ) : null}
                         <ul className="factor-list">
                           {segment.factors.map((factor) => (
                             <li key={factor.id}>
@@ -1940,6 +2106,9 @@ export function Workstation() {
               <span>输出文件</span>
               <input value={exportName} onChange={(event) => setExportName(event.target.value)} />
             </label>
+            <p className="export-note">
+              解说混音：自动避让{narrationDucking ? '开启' : '关闭'}；解说在时间线中的音量单独生效。
+            </p>
           </section>
         </aside>
       </main>
