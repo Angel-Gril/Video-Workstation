@@ -90,6 +90,26 @@ interface ClipDragPreview {
   duration: number
 }
 
+interface MultiDragState {
+  pointerId: number
+  originX: number
+  anchorId: string
+  clipIds: string[]
+  startPositions: Array<{
+    clipId: string
+    trackId: string
+    timelineStart: number
+  }>
+}
+
+interface MarqueeState {
+  pointerId: number
+  originX: number
+  originY: number
+  currentX: number
+  currentY: number
+}
+
 interface PreviewSource {
   mode: 'media' | 'timeline'
   mediaId: string | null
@@ -258,6 +278,7 @@ export function Workstation() {
   const [previewTime, setPreviewTime] = useState(0)
   const [playing, setPlaying] = useState(false)
   const previewRef = useRef<HTMLVideoElement | null>(null)
+  const timelineCanvasRef = useRef<HTMLDivElement | null>(null)
   const sceneCacheRef = useRef(new Map<string, SceneBoundary[]>())
   const speechCacheRef = useRef(new Map<string, SpeechSegment[]>())
   const waveformCacheRef = useRef(new Map<string, number[]>())
@@ -265,6 +286,11 @@ export function Workstation() {
   const visualCacheRef = useRef(new Map<string, VisualSignal[]>())
   const [clipDrag, setClipDrag] = useState<ClipDragState | null>(null)
   const [clipDragPreview, setClipDragPreview] = useState<ClipDragPreview | null>(null)
+  const [multiDrag, setMultiDrag] = useState<MultiDragState | null>(null)
+  const [multiDragDelta, setMultiDragDelta] = useState(0)
+  const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set())
+  const [snapping, setSnapping] = useState(true)
+  const [marquee, setMarquee] = useState<MarqueeState | null>(null)
   const [zoom, setZoom] = useState(42)
   const [exporting, setExporting] = useState(false)
   const [exportProgress, setExportProgress] = useState<number | null>(null)
@@ -384,6 +410,36 @@ export function Workstation() {
 
   const duration = useMemo(() => projectDuration(project), [project])
   const timelineSpan = Math.max(8, duration + 2)
+  const allTimelineClips = useMemo(
+    () => project.timeline.tracks.flatMap((track) => track.clips),
+    [project.timeline.tracks]
+  )
+  const snapPoints = useMemo(() => {
+    const points = new Set<number>([0])
+    for (const clip of allTimelineClips) {
+      points.add(clip.timelineStart)
+      points.add(clip.timelineStart + clip.duration)
+    }
+    points.add(duration)
+    return [...points].filter((value) => Number.isFinite(value) && value >= 0)
+  }, [allTimelineClips, duration])
+
+  function snapTime(time: number, ignoreClipIds: string[] = []) {
+    if (!snapping || zoom < 16) return Math.max(0, time)
+    const ignored = new Set(ignoreClipIds)
+    const targets = [
+      ...snapPoints,
+      previewTime
+    ].filter((point) => !allTimelineClips.some((clip) =>
+      ignored.has(clip.id) &&
+      (Math.abs(point - clip.timelineStart) < .001 ||
+        Math.abs(point - clip.timelineStart - clip.duration) < .001)
+    ))
+    const threshold = Math.max(6 / zoom, .035)
+    const snapped = targets.find((point) => Math.abs(point - time) <= threshold)
+    return Math.max(0, snapped ?? time)
+  }
+
   const selectedClip = useMemo(() => {
     for (const track of project.timeline.tracks) {
       const clip = track.clips.find((item) => item.id === selectedClipId)
@@ -1012,6 +1068,28 @@ export function Workstation() {
     }
   }
 
+  function splitSelectedClips() {
+    const clips = allTimelineClips.filter((clip) => selectedClipIds.has(clip.id))
+    if (clips.length === 0) return
+    const commands: Command[] = []
+    for (const clip of clips) {
+      if (clip.duration < .1) continue
+      commands.push({
+        id: uid('cmd-split'),
+        kind: 'clip.split',
+        payload: { clipId: clip.id, at: clip.timelineStart + clip.duration / 2 }
+      })
+    }
+    if (commands.length === 0) return
+    const batch = batchCommand(project, commands, `拆分 ${commands.length} 个片段`)
+    try {
+      dispatch(batch, updateMetaTime(applyCommand(project, batch)))
+      setMessage(`已拆分 ${commands.length} 个片段`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '批量拆分失败')
+    }
+  }
+
   function removeSelectedClip() {
     if (!selectedClip) return
     const command: Command = {
@@ -1021,6 +1099,78 @@ export function Workstation() {
     }
     dispatch(command, updateMetaTime(applyCommand(project, command)))
     setSelectedClipId(null)
+  }
+
+  function removeSelectedClips() {
+    const clips = allTimelineClips.filter((clip) => selectedClipIds.has(clip.id))
+    if (clips.length === 0) return
+    const commands: Command[] = clips.map((clip) => ({
+      id: uid('cmd-remove'),
+      kind: 'clip.remove' as const,
+      payload: { clipId: clip.id }
+    }))
+    const batch = batchCommand(project, commands, `删除 ${clips.length} 个片段`)
+    try {
+      dispatch(batch, updateMetaTime(applyCommand(project, batch)))
+      setSelectedClipId(null)
+      setSelectedClipIds(new Set())
+      setMessage(`已删除 ${clips.length} 个片段`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '批量删除失败')
+    }
+  }
+
+  function startMultiDrag(event: React.PointerEvent, clip: TimelineClip): boolean {
+    const draggable = allTimelineClips.filter((item) =>
+      selectedClipIds.has(item.id) &&
+      !project.timeline.tracks.find((track) => track.id === item.trackId)?.locked
+    )
+    if (draggable.length < 2) return false
+    const asset = project.media.find((item) => item.id === clip.mediaId)
+    if (!asset || asset.duration <= 0) return false
+    setSelectedClipId(clip.id)
+    setPreviewSource({ mode: 'timeline', mediaId: clip.mediaId })
+    setPreviewTime(clip.timelineStart)
+    setMultiDrag({
+      pointerId: event.pointerId,
+      originX: event.clientX,
+      anchorId: clip.id,
+      clipIds: draggable.map((item) => item.id),
+      startPositions: draggable.map((item) => ({
+        clipId: item.id,
+        trackId: item.trackId,
+        timelineStart: item.timelineStart
+      }))
+    })
+    setMultiDragDelta(0)
+    return true
+  }
+
+  function localTimelinePoint(clientX: number, clientY: number) {
+    const rect = timelineCanvasRef.current?.getBoundingClientRect()
+    if (!rect) return null
+    return {
+      x: clientX - rect.left,
+      y: clientY - rect.top
+    }
+  }
+
+  function startMarquee(event: React.PointerEvent) {
+    if (event.button !== 0) return
+    const target = event.target as HTMLElement
+    if (target.closest('button, input, select, textarea')) return
+    const point = localTimelinePoint(event.clientX, event.clientY)
+    if (!point) return
+    event.preventDefault()
+    setSelectedClipId(null)
+    setSelectedClipIds(new Set())
+    setMarquee({
+      pointerId: event.pointerId,
+      originX: point.x,
+      originY: point.y,
+      currentX: point.x,
+      currentY: point.y
+    })
   }
 
   function moveSelectedClip(direction: 'left' | 'right' | 'up' | 'down') {
@@ -1186,10 +1336,12 @@ export function Workstation() {
         redo()
       } else if (event.key === 'Delete' && selectedClip) {
         event.preventDefault()
-        removeSelectedClip()
+        if (selectedClipIds.size > 1) removeSelectedClips()
+        else removeSelectedClip()
       } else if (event.key.toLowerCase() === 's' && selectedClip && !event.ctrlKey && !event.metaKey) {
         event.preventDefault()
-        splitSelectedClip()
+        if (selectedClipIds.size > 1) splitSelectedClips()
+        else splitSelectedClip()
       }
     }
     window.addEventListener('keydown', handleKey)
@@ -1201,6 +1353,7 @@ export function Workstation() {
     if (!asset || asset.duration <= 0) return
     event.preventDefault()
     event.stopPropagation()
+    if (mode === 'move' && selectedClipIds.has(clip.id) && startMultiDrag(event, clip)) return
     setSelectedClipId(clip.id)
     setPreviewSource({ mode: 'timeline', mediaId: clip.mediaId })
     setPreviewTime(clip.timelineStart)
@@ -1222,9 +1375,10 @@ export function Workstation() {
     const drag = clipDrag
 
     function moveClip(delta: number) {
+      const timelineStart = snapTime(Math.max(0, drag.timelineStart + delta), [drag.clipId])
       setClipDragPreview({
         clipId: drag.clipId,
-        timelineStart: Math.max(0, drag.timelineStart + delta),
+        timelineStart,
         sourceStart: drag.sourceStart,
         duration: drag.duration
       })
@@ -1303,7 +1457,136 @@ export function Workstation() {
       window.removeEventListener('pointerup', handleUp)
       window.removeEventListener('pointercancel', handleUp)
     }
-  }, [clipDrag, clipDragPreview, project, zoom])
+  }, [clipDrag, clipDragPreview, previewTime, project, snapping, zoom])
+
+  useEffect(() => {
+    if (!multiDrag) return
+    const drag = multiDrag
+
+    function handleGroupMove(event: PointerEvent) {
+      if (event.pointerId !== drag.pointerId) return
+      const rawDelta = (event.clientX - drag.originX) / zoom
+      const maxBackward = Math.min(...drag.startPositions.map((item) => item.timelineStart))
+      const anchorStart = drag.startPositions.find((item) => item.clipId === drag.anchorId)
+        ?.timelineStart ?? 0
+      const desiredAnchor = Math.max(0, anchorStart + rawDelta)
+      const snappedAnchor = snapTime(desiredAnchor, drag.clipIds)
+      setMultiDragDelta(clamp(snappedAnchor - anchorStart, -maxBackward, Number.MAX_SAFE_INTEGER))
+    }
+
+    function handleGroupUp(event: PointerEvent) {
+      if (event.pointerId !== drag.pointerId) return
+      const delta = multiDragDelta
+      const commands: Command[] = drag.startPositions
+        .filter((position) => Math.abs(delta) > .001)
+        .map((position) => ({
+          id: uid('cmd-move'),
+          kind: 'clip.move' as const,
+          payload: {
+            clipId: position.clipId,
+            trackId: position.trackId,
+            timelineStart: Math.max(0, position.timelineStart + delta)
+          }
+        }))
+      setMultiDrag(null)
+      setMultiDragDelta(0)
+      if (commands.length === 0) return
+      try {
+        const batch = batchCommand(project, commands, `移动 ${commands.length} 个片段`)
+        dispatch(batch, updateMetaTime(applyCommand(project, batch)))
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : '批量移动失败')
+      }
+    }
+
+    window.addEventListener('pointermove', handleGroupMove)
+    window.addEventListener('pointerup', handleGroupUp)
+    window.addEventListener('pointercancel', handleGroupUp)
+    return () => {
+      window.removeEventListener('pointermove', handleGroupMove)
+      window.removeEventListener('pointerup', handleGroupUp)
+      window.removeEventListener('pointercancel', handleGroupUp)
+    }
+  }, [multiDrag, multiDragDelta, project, zoom])
+
+  useEffect(() => {
+    if (!marquee) return
+    const selection = marquee
+
+    function handleMarqueeMove(event: PointerEvent) {
+      if (event.pointerId !== selection.pointerId) return
+      const point = localTimelinePoint(event.clientX, event.clientY)
+      if (!point) return
+      setMarquee({ ...selection, currentX: point.x, currentY: point.y })
+    }
+
+    function handleMarqueeUp() {
+      const canvasRect = timelineCanvasRef.current?.getBoundingClientRect()
+      if (!canvasRect) {
+        setMarquee(null)
+        return
+      }
+      const left = Math.min(selection.originX, selection.currentX)
+      const right = Math.max(selection.originX, selection.currentX)
+      const top = Math.min(selection.originY, selection.currentY)
+      const bottom = Math.max(selection.originY, selection.currentY)
+      const selected = new Set<string>()
+      let primary: string | null = null
+      if (right - left > 3 || bottom - top > 3) {
+        for (const track of project.timeline.tracks) {
+          const body = timelineCanvasRef.current?.querySelector<HTMLElement>(`[data-track-id="${track.id}"]`)
+          if (!body) continue
+          const bodyRect = body.getBoundingClientRect()
+          const bodyTop = bodyRect.top - canvasRect.top
+          const bodyBottom = bodyTop + bodyRect.height
+          if (bodyBottom < top || bodyTop > bottom) continue
+          for (const clip of track.clips) {
+            const clipLeft = clip.timelineStart * zoom
+            const clipRight = clipLeft + Math.max(24, clip.duration * zoom)
+            if (clipLeft <= right && clipRight >= left) {
+              selected.add(clip.id)
+              primary ??= clip.id
+            }
+          }
+        }
+      }
+      setSelectedClipIds(selected)
+      setSelectedClipId(primary)
+      setMarquee(null)
+    }
+
+    window.addEventListener('pointermove', handleMarqueeMove)
+    window.addEventListener('pointerup', handleMarqueeUp)
+    window.addEventListener('pointercancel', handleMarqueeUp)
+    return () => {
+      window.removeEventListener('pointermove', handleMarqueeMove)
+      window.removeEventListener('pointerup', handleMarqueeUp)
+      window.removeEventListener('pointercancel', handleMarqueeUp)
+    }
+  }, [marquee, project.timeline.tracks, zoom])
+
+  function handleClipPointerDown(event: React.PointerEvent, clip: TimelineClip, mode: ClipDragMode) {
+    const additive = event.shiftKey || event.ctrlKey || event.metaKey
+    if (additive) {
+      event.preventDefault()
+      event.stopPropagation()
+      const next = new Set(selectedClipIds)
+      if (next.has(clip.id)) {
+        next.delete(clip.id)
+      } else {
+        next.add(clip.id)
+      }
+      setSelectedClipIds(next)
+      setSelectedClipId(next.has(clip.id) ? clip.id : null)
+      if (next.has(clip.id)) {
+        setPreviewSource({ mode: 'timeline', mediaId: clip.mediaId })
+        setPreviewTime(clip.timelineStart)
+      }
+      return
+    }
+    if (mode === 'move') setSelectedClipIds(new Set())
+    startClipDrag(event, clip, mode)
+  }
 
   function seekTimeline(clientX: number, element: HTMLElement) {
     const rect = element.getBoundingClientRect()
@@ -1755,8 +2038,21 @@ export function Workstation() {
           <section className="timeline-shell">
             <div className="timeline-toolbar">
               <div>
-                <button onClick={splitSelectedClip} disabled={!selectedClip}>拆分</button>
-                <button className="danger" onClick={removeSelectedClip} disabled={!selectedClip}>删除</button>
+                <button onClick={() => selectedClipIds.size > 1 ? splitSelectedClips() : splitSelectedClip()} disabled={!selectedClip}>拆分</button>
+                <button
+                  className="danger"
+                  onClick={() => selectedClipIds.size > 1 ? removeSelectedClips() : removeSelectedClip()}
+                  disabled={!selectedClip}
+                >
+                  删除
+                </button>
+                <button
+                  className={snapping ? 'active' : ''}
+                  onClick={() => setSnapping((value) => !value)}
+                  title="吸附到片段边界、播放头和时间零点"
+                >
+                  吸附
+                </button>
               </div>
               <div>
                 <button onClick={() => addTrack('video')}>+视频</button>
@@ -1770,7 +2066,12 @@ export function Workstation() {
               </div>
             </div>
             <div className="timeline-scroll">
-              <div className="timeline-canvas" style={{ width: 120 + timelineSpan * zoom + 40 }}>
+              <div
+                ref={timelineCanvasRef}
+                className="timeline-canvas"
+                style={{ width: 120 + timelineSpan * zoom + 40 }}
+                onPointerDown={startMarquee}
+              >
                 <div
                   className="timeline-ruler"
                   style={{ width: timelineSpan * zoom }}
@@ -1800,8 +2101,17 @@ export function Workstation() {
                       </div>
                     </div>
                     <div className="track-body" style={{ width: timelineSpan * zoom }}>
+                      <div data-track-id={track.id} style={{ display: 'contents' }} />
                       {track.clips.map((clip) => {
-                        const preview = clipDragPreview?.clipId === clip.id ? clipDragPreview : null
+                        const singlePreview = clipDragPreview?.clipId === clip.id ? clipDragPreview : null
+                        const multiPreview = multiDrag && selectedClipIds.has(clip.id)
+                          ? {
+                            timelineStart: clip.timelineStart + multiDragDelta,
+                            sourceStart: clip.sourceStart,
+                            duration: clip.duration
+                          }
+                          : null
+                        const preview = singlePreview ?? multiPreview
                         const view = preview ?? clip
                         return (
                           <div
@@ -1809,6 +2119,7 @@ export function Workstation() {
                             className={[
                               'timeline-clip',
                               clip.id === selectedClipId ? 'selected' : '',
+                              selectedClipIds.has(clip.id) ? 'multi-selected' : '',
                               preview ? 'dragging' : '',
                               track.kind === 'caption' ? 'caption' : ''
                             ].filter(Boolean).join(' ')}
@@ -1816,7 +2127,7 @@ export function Workstation() {
                               left: view.timelineStart * zoom,
                               width: Math.max(24, view.duration * zoom)
                             }}
-                            onPointerDown={(event) => startClipDrag(event, clip, 'move')}
+                            onPointerDown={(event) => handleClipPointerDown(event, clip, 'move')}
                           >
                             <span>{clip.text ? clip.text : clip.narration ? clip.narration : formatTime(view.duration)}</span>
                             {track.kind === 'video' && thumbnails[clip.mediaId] ? (
@@ -1835,12 +2146,12 @@ export function Workstation() {
                             ) : null}
                             <span
                               className="clip-handle start"
-                              onPointerDown={(event) => startClipDrag(event, clip, 'trim-start')}
+                              onPointerDown={(event) => handleClipPointerDown(event, clip, 'trim-start')}
                               aria-label="裁剪开头"
                             />
                             <span
                               className="clip-handle end"
-                              onPointerDown={(event) => startClipDrag(event, clip, 'trim-end')}
+                              onPointerDown={(event) => handleClipPointerDown(event, clip, 'trim-end')}
                               aria-label="裁剪结尾"
                             />
                           </div>
@@ -1849,6 +2160,17 @@ export function Workstation() {
                     </div>
                   </div>
                 ))}
+                {marquee ? (
+                  <div
+                    className="marquee-box"
+                    style={{
+                      left: Math.min(marquee.originX, marquee.currentX),
+                      top: Math.min(marquee.originY, marquee.currentY),
+                      width: Math.abs(marquee.currentX - marquee.originX),
+                      height: Math.abs(marquee.currentY - marquee.originY)
+                    }}
+                  />
+                ) : null}
                 <div className="playhead" style={{ left: 120 + previewTime * zoom }} />
               </div>
             </div>

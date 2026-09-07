@@ -235,17 +235,24 @@ h2 { font-size: 12px; color: #c9c9d1; font-weight: 600; }
   display: grid;
   grid-template-rows: minmax(0, 1fr) 42px;
   min-height: 0;
+  overflow: hidden;
   border-bottom: 1px solid var(--line);
 }
 
 .preview-stage {
+  position: relative;
   min-height: 0;
   display: grid;
   place-items: center;
   padding: 18px;
+  overflow: hidden;
 }
 
 .preview-video {
+  min-width: 0;
+  min-height: 0;
+  width: auto;
+  height: auto;
   max-width: 100%;
   max-height: 100%;
   background: #000;
@@ -299,6 +306,8 @@ h2 { font-size: 12px; color: #c9c9d1; font-weight: 600; }
 .transport span { color: var(--muted); }
 
 .timeline-shell {
+  position: relative;
+  z-index: 2;
   display: grid;
   grid-template-rows: 40px minmax(0, 1fr);
   min-height: 0;
@@ -321,6 +330,15 @@ h2 { font-size: 12px; color: #c9c9d1; font-weight: 600; }
 .zoom-controls button { width: 26px; }
 .timeline-scroll { overflow: auto; min-height: 0; }
 .timeline-canvas { position: relative; min-width: 100%; padding-bottom: 8px; }
+.timeline-canvas:active { cursor: crosshair; }
+.marquee-box {
+  position: absolute;
+  z-index: 5;
+  border: 1px solid rgba(255, 107, 71, .8);
+  background: rgba(255, 107, 71, .12);
+  border-radius: 2px;
+  pointer-events: none;
+}
 
 .timeline-ruler {
   position: relative;
@@ -411,6 +429,9 @@ h2 { font-size: 12px; color: #c9c9d1; font-weight: 600; }
 }
 
 .timeline-clip.selected { border-color: var(--accent); background: #452a22; }
+.timeline-clip.multi-selected { border-color: #ffa48f; box-shadow: 0 0 0 1px rgba(255, 107, 71, .38); }
+.timeline-clip.selected.multi-selected { background: #4d2b23; }
+.timeline-clip.selected .clip-thumbnail-strip { opacity: .85; }
 .timeline-clip.dragging { z-index: 3; cursor: grabbing; }
 
 .clip-thumbnail-strip {
