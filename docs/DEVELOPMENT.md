@@ -43,3 +43,27 @@ node .vite-e2e.mjs
 It resets the local saved project, imports `sample.mp4`, runs speech and scene analysis, generates a
 plan, accepts the first candidate, applies it, saves and reloads, trims and undoes, then checks that
 the restored label and saved clip count remain consistent. It also captures `workstation-complete.png`.
+
+## Git Workflow
+
+Use the repository's `main` branch as the reviewed integration branch. Each development increment
+follows this order:
+
+1. Create a focused feature branch from `main`.
+2. Implement the smallest coherent slice and update documentation where behavior changes.
+3. Run `npm run typecheck` and `npm test -- --run` before every commit.
+4. Commit with a conventional subject, push the feature branch, and fast-forward `main` only after
+   verification succeeds.
+
+```bash
+git switch -c feature/transition-rendering
+# implement + verify
+git commit -m "feat: render directional transitions"
+git push -u origin feature/transition-rendering
+git switch main
+git merge --ff-only feature/transition-rendering
+git push origin main
+```
+
+Windows development must expose `FFMPEG_PATH` and `FFPROBE_PATH` to the Python media service when
+the binaries are not already on `PATH`.

@@ -370,6 +370,10 @@ def number_literal(value: float) -> str:
     return f"{value:.9f}".rstrip("0").rstrip(".")
 
 
+def escape_filter_commas(expression: str) -> str:
+    return expression.replace(",", "\\,")
+
+
 def clamp_expr(expression: str, low: float, high: float) -> str:
     return f"min({number_literal(high)},max({number_literal(low)},{expression}))"
 
@@ -382,11 +386,29 @@ def ffmpeg_brightness(expression: str) -> str:
     return f"({expression}-1)/2"
 
 
+directional_transitions = {
+    "wipe-left", "wipe-right", "slide-left", "slide-right"
+}
+
+
+def transition_kinds(clip: dict[str, Any]) -> tuple[str, str]:
+    return str(clip.get("transitionIn", "none")), str(clip.get("transitionOut", "none"))
+
+
+def directional_transition(clip: dict[str, Any]) -> tuple[str, str]:
+    start, end = transition_kinds(clip)
+    return (
+        start if start in directional_transitions else "none",
+        end if end in directional_transitions else "none",
+    )
+
+
 def transition_fade(
     clip: dict[str, Any], video: bool
 ) -> tuple[float, float] | None:
-    start = str(clip.get("transitionIn", "none"))
-    end = str(clip.get("transitionOut", "none"))
+    start, end = transition_kinds(clip)
+    start = "none" if start in directional_transitions else start
+    end = "none" if end in directional_transitions else end
     if start == "none" and end == "none":
         return None
     duration = max(0.0, float(clip.get("duration", 0)))
@@ -399,6 +421,46 @@ def transition_fade(
     if not video and end in ("fade", "dissolve"):
         fade_out = min(0.25, fade_out)
     return fade_in, fade_out
+
+
+def wipe_alpha_expression(
+    kind: str,
+    direction: str,
+    duration: float,
+    transition_duration: float,
+    frame_rate: float,
+) -> str:
+    if direction == "in":
+        progress = f"clip((N/{frame_rate:.9f})/{transition_duration:.9f},0,1)"
+    else:
+        offset = max(0.0, duration - transition_duration)
+        progress = f"clip((N/{frame_rate:.9f}-{offset:.9f})/{transition_duration:.9f},0,1)"
+    if kind == "wipe-left":
+        boundary = f"W*{progress}" if direction == "in" else f"W*(1-{progress})"
+        return f"255*lt(X,{boundary})"
+    boundary = f"W*(1-{progress})" if direction == "in" else f"W*{progress}"
+    return f"255*gte(X,{boundary})"
+
+
+def slide_overlay_expression(
+    kind: str,
+    direction: str,
+    position_x: str,
+    timeline_start: float,
+    transition_duration: float,
+    duration: float,
+) -> str:
+    if direction == "in":
+        progress = f"clip((t-{timeline_start:.9f})/{transition_duration:.9f},0,1)"
+    else:
+        offset = max(0.0, duration - transition_duration)
+        progress = f"clip((t-{timeline_start + offset:.9f})/{transition_duration:.9f},0,1)"
+    base = f"(main_w-overlay_w)/2+{position_x}"
+    if kind == "slide-left":
+        offset_expression = f"main_w*(1-{progress})" if direction == "in" else f"-main_w*{progress}"
+        return f"{base}+{offset_expression}" if direction == "in" else f"{base}{offset_expression}"
+    offset_expression = f"-main_w*(1-{progress})" if direction == "in" else f"main_w*{progress}"
+    return f"{base}{offset_expression}"
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -463,6 +525,7 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
             base_label = f"base{index}"
             output_label = f"base{index + 1}"
             timeline_start = float(clip.get("timelineStart", 0))
+            duration = max(0.0, float(clip.get("duration", 0)))
             transform = clip.get("transform", {})
             position_y = float(transform.get("y", 0))
             chain = [f"scale={scale}:{height}:force_original_aspect_ratio=decrease", "setsar=1"]
@@ -490,8 +553,24 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
                 opacity = clamp(sample_effect_value(clip, "opacity", 1), 0, 1)
             else:
                 opacity = clamp(float(transform.get("opacity", 1)), 0, 1)
-            if opacity < 1:
-                chain.extend(["format=rgba", f"colorchannelmixer=aa={opacity}"])
+            transition_in, transition_out = directional_transition(clip)
+            needs_alpha_mask = opacity < 1 or transition_in != "none" or transition_out != "none"
+            if needs_alpha_mask:
+                chain.append("format=rgba")
+                if opacity < 1:
+                    chain.append(f"colorchannelmixer=aa={opacity}")
+            if transition_in != "none":
+                transition_duration = min(0.5, duration * .25)
+                chain.extend([
+                    "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
+                    f"a='{escape_filter_commas(wipe_alpha_expression(transition_in, 'in', duration, transition_duration, frame_rate))}'"
+                ])
+            if transition_out != "none":
+                transition_duration = min(0.5, duration * .25)
+                chain.extend([
+                    "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
+                    f"a='{escape_filter_commas(wipe_alpha_expression(transition_out, 'out', duration, transition_duration, frame_rate))}'"
+                ])
             brightness = sample_effect_value(
                 clip, "brightness", clamp(float(transform.get("brightness", 1)), -1, 3)
             )
@@ -508,6 +587,9 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
                 brightness_part = clamp_expr(brightness_keyframes or number_literal(brightness), -1, 1)
                 contrast_part = clamp_expr(contrast_expr or number_literal(contrast), 0, 3)
                 saturation_part = clamp_expr(saturation_expr or number_literal(saturation), 0, 3)
+                brightness_part = escape_filter_commas(brightness_part)
+                contrast_part = escape_filter_commas(contrast_part)
+                saturation_part = escape_filter_commas(saturation_part)
                 chain.append(
                     f"eq=brightness='{ffmpeg_brightness(brightness_part)}':"
                     f"contrast='{contrast_part}':"
@@ -533,9 +615,24 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
                     clip, "position", 0, f"(t-{timeline_start:.9f})"
                 ) or position_expr
             position_y_expr = number_literal(clamp(position_y, -4000, 4000))
+            overlay_x = f"(main_w-overlay_w)/2+{position_x}"
+            slide_kind, slide_direction = (
+                (transition_in, "in")
+                if transition_in.startswith("slide-")
+                else (transition_out, "out")
+            )
+            if slide_kind.startswith("slide-"):
+                overlay_x = slide_overlay_expression(
+                    slide_kind,
+                    slide_direction,
+                    position_x,
+                    timeline_start,
+                    min(0.5, duration * .25),
+                    duration,
+                )
             filters.append(
                 f"[{base_label}][{clip_label}]overlay="
-                f"x='(main_w-overlay_w)/2+{position_x}':y='(main_h-overlay_h)/2+{position_y_expr}':eval=frame:"
+                f"x='{escape_filter_commas(overlay_x)}':y='(main_h-overlay_h)/2+{position_y_expr}':eval=frame:"
                 "format=auto:enable='between(t,"
                 f"{timeline_start},{timeline_start + float(clip.get('duration', 0))})'[{output_label}]"
             )

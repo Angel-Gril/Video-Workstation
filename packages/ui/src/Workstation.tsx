@@ -59,6 +59,19 @@ const effectRanges: Record<EffectKind, { min: number; max: number; step: number;
   saturation: { min: 0, max: 3, step: .01, fallback: 1 }
 }
 
+const transitionLabels: Record<Exclude<TransitionKind, 'none'>, string> = {
+  fade: '淡入淡出',
+  dissolve: '叠化',
+  'wipe-left': '左向擦除',
+  'wipe-right': '右向擦除',
+  'slide-left': '左向滑动',
+  'slide-right': '右向滑动'
+}
+
+function transitionLabel(kind: 'cut' | 'none' | TransitionKind): string {
+  return kind === 'cut' || kind === 'none' || kind === undefined ? '硬切' : transitionLabels[kind]
+}
+
 interface ClipDragState {
   clipId: string
   trackId: string
@@ -1716,7 +1729,7 @@ export function Workstation() {
                         </header>
                         <p>{segment.transcript || segment.summary || '无语音文本'}</p>
                         <p className="plan-transition">
-                          转场建议：{segment.transition === 'cut' ? '硬切' : segment.transition === 'dissolve' ? '叠化' : '淡入淡出'}
+                          转场建议：{transitionLabel(segment.transition)}
                         </p>
                         <ul className="factor-list">
                           {segment.factors.map((factor) => (
@@ -1781,6 +1794,10 @@ export function Workstation() {
                     <option value="none">无</option>
                     <option value="fade">淡入</option>
                     <option value="dissolve">叠化</option>
+                    <option value="wipe-left">左擦入</option>
+                    <option value="wipe-right">右擦入</option>
+                    <option value="slide-left">左滑入</option>
+                    <option value="slide-right">右滑入</option>
                   </select>
                 </label>
                 <label className="field">
@@ -1795,6 +1812,10 @@ export function Workstation() {
                     <option value="none">无</option>
                     <option value="fade">淡出</option>
                     <option value="dissolve">叠化</option>
+                    <option value="wipe-left">左擦出</option>
+                    <option value="wipe-right">右擦出</option>
+                    <option value="slide-left">左滑出</option>
+                    <option value="slide-right">右滑出</option>
                   </select>
                 </label>
                 <label className="range">
