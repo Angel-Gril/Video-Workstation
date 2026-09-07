@@ -1,0 +1,136 @@
+export type TrackKind = 'video' | 'audio' | 'caption' | 'music'
+
+export type EffectKind =
+  | 'opacity'
+  | 'scale'
+  | 'position'
+  | 'rotation'
+  | 'brightness'
+  | 'contrast'
+  | 'saturation'
+
+export type Easing = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut'
+
+export type TransitionKind = 'none' | 'fade' | 'dissolve' | 'wipe-left' | 'wipe-right' | 'slide-left' | 'slide-right'
+
+export interface Keyframe {
+  time: number
+  value: number
+  easing: Easing
+}
+
+export interface KeyframeTrack {
+  property: EffectKind
+  keyframes: Keyframe[]
+}
+
+export interface MediaTransform {
+  scale: number
+  x: number
+  y: number
+  rotation: number
+  opacity: number
+  brightness: number
+  contrast: number
+  saturation: number
+}
+
+export interface MediaAsset {
+  id: string
+  kind: TrackKind
+  name: string
+  path: string
+  duration: number
+  width?: number | undefined
+  height?: number | undefined
+  frameRate?: number | undefined
+  audioChannels?: number | undefined
+  audioSampleRate?: number | undefined
+  codec?: string | undefined
+}
+
+export interface TimelineClip {
+  id: string
+  trackId: string
+  mediaId: string
+  sourceStart: number
+  timelineStart: number
+  duration: number
+  transform: MediaTransform
+  effects: KeyframeTrack[]
+  text?: string | undefined
+  volume: number
+  transitionIn?: TransitionKind | undefined
+  transitionOut?: TransitionKind | undefined
+  narration?: string | undefined
+  narrationPath?: string | undefined
+}
+
+export interface Track {
+  id: string
+  kind: TrackKind
+  clips: TimelineClip[]
+  locked: boolean
+  muted: boolean
+  hidden: boolean
+}
+
+export interface Timeline {
+  tracks: Track[]
+  duration: number
+}
+
+export interface ProjectMeta {
+  version: 1
+  name: string
+  createdAt: string
+  updatedAt: string
+  width: number
+  height: number
+  frameRate: number
+}
+
+export interface Project {
+  meta: ProjectMeta
+  media: MediaAsset[]
+  timeline: Timeline
+}
+
+export interface CommandHistoryEntry {
+  id: string
+  command: Command
+  inverse: Command | null
+  at: string
+}
+
+export interface ProjectDocument {
+  project: Project
+  history: CommandHistoryEntry[]
+  future: Command[]
+}
+
+export interface BatchCommandPayload {
+  label?: string | undefined
+  commands: Command[]
+}
+
+export interface Command {
+  id: string
+  kind:
+    | 'project.set'
+    | 'command.batch'
+    | 'media.add'
+    | 'media.remove'
+    | 'track.add'
+    | 'track.remove'
+    | 'clip.add'
+    | 'clip.remove'
+    | 'clip.trim'
+    | 'clip.move'
+    | 'clip.split'
+    | 'track.replaceClips'
+    | 'clip.transform'
+    | 'clip.keyframe.set'
+    | 'track.reorder'
+  payload: Record<string, unknown>
+}

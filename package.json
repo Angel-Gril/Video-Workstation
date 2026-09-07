@@ -1,0 +1,26 @@
+{
+  "name": "aivideo-workstation",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "dev": "concurrently -k \"python packages/pipeline/media_server.py\" \"npm run dev --workspace @aivideo/ui\"",
+    "typecheck": "tsc --build",
+    "test": "vitest run",
+    "pipeline:media": "python packages/pipeline/media_probe.py",
+    "pipeline:export": "python packages/pipeline/exporter.py"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "concurrently": "^10.0.5",
+    "playwright": "^1.63.0",
+    "tsx": "^4.23.13",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.4"
+  }
+}
