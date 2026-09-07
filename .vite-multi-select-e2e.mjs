@@ -209,6 +209,28 @@ if (restored !== clipsAfterSplit) {
   throw new Error(`Undo restored ${restored} clips, expected ${clipsAfterSplit}`)
 }
 
+await clickClipCenter(0)
+await page.waitForFunction(() => document.querySelectorAll('[data-clip-id].multi-selected').length === 1, undefined, { timeout: 5000 })
+await clickClipCenter(1, true)
+await page.waitForFunction(() => document.querySelectorAll('[data-clip-id].multi-selected').length === 2, undefined, { timeout: 5000 })
+console.log('selection', await page.evaluate(() => ({
+  selected: [...document.querySelectorAll('[data-clip-id].selected')].map((item) => item.getAttribute('data-clip-id')),
+  multi: [...document.querySelectorAll('[data-clip-id].multi-selected')].map((item) => item.getAttribute('data-clip-id'))
+})))
+await page.selectOption('label.field:has(span:text("入点转场")) select', 'fade')
+await page.selectOption('label.field:has(span:text("转场时长")) select', '0.8')
+await page.waitForTimeout(1400)
+const transitionCount = await page.evaluate(() => fetch('/api/project')
+  .then((response) => response.json())
+  .then((data) => data.project.timeline.tracks
+    .flatMap((track) => track.clips)
+    .filter((clip) => ['e2e-clip-0', 'e2e-clip-1'].includes(clip.id))
+    .filter((clip) => clip.transitionIn === 'fade' && Math.abs((clip.transitionDuration ?? 0.5) - 0.8) < .001)
+    .length))
+if (transitionCount !== 2) {
+  throw new Error(`Batch transition only updated ${transitionCount} of 2 clips`)
+}
+
 const snappingOn = await page.locator('.timeline-toolbar button:text("吸附")')
   .evaluate((element) => element.classList.contains('active'))
 if (!snappingOn) throw new Error('Snapping toggle did not initialize active')
@@ -221,6 +243,7 @@ console.log(JSON.stringify({
   clipsAfterDelete,
   restored,
   selectedDeltas,
+  transitionCount,
   snappingOn
 }))
 await browser.close()

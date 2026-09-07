@@ -272,6 +272,7 @@ def create_jianying_draft(plan: dict[str, Any], output: Path) -> Path:
                 "text": entry.get("text") or None,
                 "transition_in": entry.get("transitionIn") or "none",
                 "transition_out": entry.get("transitionOut") or "none",
+                "transition_duration": entry.get("transitionDuration") or 0.5,
                 "volume": entry.get("volume", 1),
             })
     draft = {
@@ -569,13 +570,22 @@ def transition_fade(
     duration = max(0.0, float(clip.get("duration", 0)))
     if duration < 0.2:
         return None
-    fade_in = min(0.5, duration * 0.25) if start != "none" else 0.0
-    fade_out = min(0.5, duration * 0.25) if end != "none" else 0.0
+    transition_duration = transition_duration_of(clip)
+    fade_in = min(transition_duration, duration * 0.25) if start != "none" else 0.0
+    fade_out = min(transition_duration, duration * 0.25) if end != "none" else 0.0
     if not video and start in ("fade", "dissolve"):
         fade_in = min(0.25, fade_in)
     if not video and end in ("fade", "dissolve"):
         fade_out = min(0.25, fade_out)
     return fade_in, fade_out
+
+
+def transition_duration_of(clip: dict[str, Any]) -> float:
+    try:
+        value = float(clip.get("transitionDuration", 0.5))
+    except (TypeError, ValueError):
+        return 0.5
+    return clamp(value, 0.05, 2.0)
 
 
 def wipe_alpha_expression(
@@ -737,19 +747,20 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
             else:
                 opacity = clamp(float(transform.get("opacity", 1)), 0, 1)
             transition_in, transition_out = directional_transition(clip)
+            clip_transition_duration = transition_duration_of(clip)
             needs_alpha_mask = opacity < 1 or transition_in != "none" or transition_out != "none"
             if needs_alpha_mask:
                 chain.append("format=rgba")
                 if opacity < 1:
                     chain.append(f"colorchannelmixer=aa={opacity}")
             if transition_in != "none":
-                transition_duration = min(0.5, duration * .25)
+                transition_duration = min(clip_transition_duration, duration * .25)
                 chain.extend([
                     "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
                     f"a='{escape_filter_commas(wipe_alpha_expression(transition_in, 'in', duration, transition_duration, frame_rate))}'"
                 ])
             if transition_out != "none":
-                transition_duration = min(0.5, duration * .25)
+                transition_duration = min(clip_transition_duration, duration * .25)
                 chain.extend([
                     "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
                     f"a='{escape_filter_commas(wipe_alpha_expression(transition_out, 'out', duration, transition_duration, frame_rate))}'"
@@ -810,7 +821,7 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
                     slide_direction,
                     position_x,
                     timeline_start,
-                    min(0.5, duration * .25),
+                    clip_transition_duration,
                     duration,
                 )
             filters.append(

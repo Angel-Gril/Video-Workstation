@@ -163,6 +163,15 @@ function invert(command: Command, before: Project): Command | null {
           trackIds: before.timeline.tracks.map((track) => track.id)
         }
       }
+    case 'track.replaceClips': {
+      const trackId = command.payload.trackId
+      const track = typeof trackId === 'string'
+        ? before.timeline.tracks.find((item) => item.id === trackId)
+        : undefined
+      return track
+        ? { ...command, payload: { trackId, clips: track.clips } }
+        : null
+    }
     default:
       return null
   }

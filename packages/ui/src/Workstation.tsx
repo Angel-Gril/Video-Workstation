@@ -1223,6 +1223,31 @@ export function Workstation() {
     setMessage(label)
   }
 
+  function changeSelectedTransitions(patch: Partial<TimelineClip>, label: string) {
+    const primaryId = selectedClip?.id
+    if (!primaryId) return
+    const clips = allTimelineClips.filter((item) =>
+      selectedClipIdsRef.current.has(item.id) || item.id === primaryId
+    )
+    if (clips.length === 0) return
+    const nextById = new Map(clips.map((clip) => [clip.id, { ...clip, ...patch }]))
+    const commands = [...new Set(clips.map((clip) => clip.trackId))].map((trackId) => {
+      const track = project.timeline.tracks.find((item) => item.id === trackId)
+      if (!track) throw new Error('目标轨道不存在')
+      return {
+        id: uid('cmd-transition'),
+        kind: 'track.replaceClips' as const,
+        payload: {
+          trackId: track.id,
+          clips: track.clips.map((item) => nextById.get(item.id) ?? item)
+        }
+      }
+    })
+    const batch = batchCommand(project, commands, label)
+    dispatch(batch, updateMetaTime(applyCommand(project, batch)))
+    setMessage(label)
+  }
+
   function changeOpacity(value: number) {
     if (!selectedClip) return
     changeSelectedClip({
@@ -2308,9 +2333,9 @@ export function Workstation() {
                   <span>入点转场</span>
                   <select
                     value={selectedClip.transitionIn ?? 'none'}
-                    onChange={(event) => changeSelectedClip(
+                    onChange={(event) => changeSelectedTransitions(
                       { transitionIn: event.target.value as TransitionKind },
-                      '入点转场已更新'
+                      `已更新${selectedClipIdsRef.current.size > 1 ? ` ${selectedClipIdsRef.current.size} 个片段的` : ''}入点转场`
                     )}
                   >
                     <option value="none">无</option>
@@ -2326,9 +2351,9 @@ export function Workstation() {
                   <span>出点转场</span>
                   <select
                     value={selectedClip.transitionOut ?? 'none'}
-                    onChange={(event) => changeSelectedClip(
+                    onChange={(event) => changeSelectedTransitions(
                       { transitionOut: event.target.value as TransitionKind },
-                      '出点转场已更新'
+                      `已更新${selectedClipIdsRef.current.size > 1 ? ` ${selectedClipIdsRef.current.size} 个片段的` : ''}出点转场`
                     )}
                   >
                     <option value="none">无</option>
@@ -2338,6 +2363,24 @@ export function Workstation() {
                     <option value="wipe-right">右擦出</option>
                     <option value="slide-left">左滑出</option>
                     <option value="slide-right">右滑出</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>转场时长</span>
+                  <select
+                    value={String(selectedClip.transitionDuration ?? 0.5)}
+                    onChange={(event) => changeSelectedTransitions(
+                      { transitionDuration: Number(event.target.value) },
+                      `已更新${selectedClipIdsRef.current.size > 1 ? ` ${selectedClipIdsRef.current.size} 个片段的` : ''}转场时长`
+                    )}
+                  >
+                    <option value="0.2">0.20s</option>
+                    <option value="0.3">0.30s</option>
+                    <option value="0.5">0.50s</option>
+                    <option value="0.8">0.80s</option>
+                    <option value="1.0">1.00s</option>
+                    <option value="1.5">1.50s</option>
+                    <option value="2">2.00s</option>
                   </select>
                 </label>
                 <label className="range">

@@ -16,6 +16,7 @@ export interface ExportPlanEntry {
   effects?: TimelineClip['effects']
   transitionIn?: TimelineClip['transitionIn']
   transitionOut?: TimelineClip['transitionOut']
+  transitionDuration?: TimelineClip['transitionDuration']
   narration?: string
   narrationPending?: boolean
   narrationVoice?: string
@@ -56,6 +57,7 @@ export function clipToPlanEntry(project: Project, clip: TimelineClip): ExportPla
   if (track?.muted) entry.muted = true
   if (clip.transitionIn) entry.transitionIn = clip.transitionIn
   if (clip.transitionOut) entry.transitionOut = clip.transitionOut
+  if (clip.transitionDuration !== undefined) entry.transitionDuration = clip.transitionDuration
   if (clip.effects.length > 0) entry.effects = clip.effects
 
   if (clip.text !== undefined) entry.text = clip.text

@@ -94,6 +94,38 @@ describe('timeline reducer', () => {
     expect(restored.project.timeline.tracks[0]!.clips).toEqual(project.timeline.tracks[0]!.clips)
   })
 
+  it('undoes sequential track replacement batch members', () => {
+    const firstPatch: TimelineClip = { ...clip, text: '第一段', transitionIn: 'fade' }
+    const secondPatch: TimelineClip = { ...firstPatch, transitionDuration: 0.8 }
+    const firstReplace: Command = {
+      id: 'cmd-replace-1',
+      kind: 'track.replaceClips',
+      payload: {
+        trackId: 'track-1',
+        clips: [firstPatch]
+      }
+    }
+    const secondReplace: Command = {
+      id: 'cmd-replace-2',
+      kind: 'track.replaceClips',
+      payload: {
+        trackId: 'track-1',
+        clips: [secondPatch]
+      }
+    }
+    const batch = batchCommand(project, [firstReplace, secondReplace], '批量更新片段')
+    const applied = prepareCommand(project, batch, [], [])
+
+    expect(applied.project.timeline.tracks[0]!.clips[0]).toMatchObject({
+      text: '第一段',
+      transitionIn: 'fade',
+      transitionDuration: 0.8
+    })
+
+    const restored = undo(applied.project, applied.history, applied.future)
+    expect(restored.project.timeline.tracks[0]!.clips).toEqual(project.timeline.tracks[0]!.clips)
+  })
+
   it('finds overlapping clips at a time point', () => {
     const next = applyCommand(project, command)
     expect(findClipsAt(next, 1)).toHaveLength(1)

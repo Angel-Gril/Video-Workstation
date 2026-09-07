@@ -62,6 +62,7 @@ export interface TimelineClip {
   volume: number
   transitionIn?: TransitionKind | undefined
   transitionOut?: TransitionKind | undefined
+  transitionDuration?: number | undefined
   narration?: string | undefined
   narrationPath?: string | undefined
   narrationPending?: boolean | undefined
