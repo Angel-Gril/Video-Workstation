@@ -40,4 +40,11 @@ describe('persistence', () => {
   it('rejects unknown project formats', () => {
     expect(() => deserializeProject('{"format":"other"}')).toThrow('Unknown project format')
   })
+
+  it('restores externally saved projects without command arrays', () => {
+    const restored = deserializeProject(JSON.stringify({ format: 'ai-video-workstation/1', project }))
+    expect(restored.project).toEqual(project)
+    expect(restored.history).toEqual([])
+    expect(restored.future).toEqual([])
+  })
 })

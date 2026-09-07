@@ -32,11 +32,12 @@ export function deserializeProject(raw: string): Omit<SavedDocument, 'history'> 
   }
   return {
     ...parsed,
-    history: parsed.history.map((command, index) => ({
+    history: (parsed.history ?? []).map((command, index) => ({
       id: command.id,
       command,
       inverse: null,
       at: parsed.project?.meta.updatedAt ?? new Date().toISOString()
-    }))
+    })),
+    future: parsed.future ?? []
   }
 }

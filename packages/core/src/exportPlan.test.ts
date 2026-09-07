@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clipToPlanEntry, timelineToExportPlan } from './exportPlan'
+import { clipToPlanEntry, timelineToExportPlan, timelineToFCPXML } from './exportPlan'
 import type { Project } from './types'
 
 const project: Project = {
@@ -98,5 +98,13 @@ describe('export plan', () => {
 
     expect(plan.video).toEqual([])
     expect(plan.caption).toHaveLength(1)
+  })
+
+  it('renders the timeline as FCPXML', () => {
+    const xml = timelineToFCPXML(project)
+    expect(xml).toContain('<fcpxml version="1.10">')
+    expect(xml).toContain('<asset id="asset-1"')
+    expect(xml).toContain('offset="0/30s" start="60/30s" duration="150/30s"')
+    expect(xml).toContain('示例字幕')
   })
 })

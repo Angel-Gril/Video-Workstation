@@ -20,6 +20,11 @@ interface Candidate {
   matchedKeywords: string[]
   overlapIds: string[]
   transcript: string
+  visual: {
+    motion: number
+    brightness: number
+    saturation: number
+  }
 }
 
 export const planStrategies: PlanStrategy[] = [
@@ -86,7 +91,7 @@ function makeFactors(candidate: Candidate, weights: PlanStrategy['weights']): Pl
       label: '画面信号',
       value: candidate.visualScore,
       weight: weights.visual ?? 0,
-      detail: `综合画面运动与内容变化 ${candidate.visualScore.toFixed(2)}`
+      detail: `运动 ${candidate.visual.motion.toFixed(2)} · 亮度 ${candidate.visual.brightness.toFixed(2)} · 饱和度 ${candidate.visual.saturation.toFixed(2)}`
     })
   }
   return factors
@@ -108,7 +113,9 @@ function makeReasons(candidate: Candidate, factors: PlanFactor[]): string[] {
     reasons.push(`与剪辑意图相关：${candidate.matchedKeywords.join('、')}`)
   }
   if (candidate.durationScore < 0.25) reasons.push('片段过短或过长，建议先接受再手动裁剪')
-  if (candidate.visualScore > 0) reasons.push(`画面运动与内容变化评分 ${candidate.visualScore.toFixed(2)}`)
+  if (candidate.visualScore > 0) {
+    reasons.push(`画面运动 ${candidate.visual.motion.toFixed(2)}，亮度 ${candidate.visual.brightness.toFixed(2)}`)
+  }
   if (reasons.length === 0) reasons.push('综合信号较弱，适合作为备选素材')
   return reasons
 }
@@ -183,6 +190,12 @@ function candidateWindows(input: PlannerInput): Candidate[] {
           1
         )
         : 0
+      const brightness = overlappingSignals.length > 0
+        ? overlappingSignals.reduce((total, signal) => total + signal.brightness, 0) / overlappingSignals.length
+        : 0
+      const saturation = overlappingSignals.length > 0
+        ? overlappingSignals.reduce((total, signal) => total + signal.saturation, 0) / overlappingSignals.length
+        : 0
 
       return {
         mediaId: window.mediaId,
@@ -193,6 +206,7 @@ function candidateWindows(input: PlannerInput): Candidate[] {
         intentScore: clampNumber(matchedKeywords.length * 0.42, 0, 1),
         durationScore: duration >= 2 && duration <= 25 ? 0.85 : duration < 2 ? 0.3 : 0.55,
         visualScore,
+        visual: { motion: visualScore, brightness, saturation },
         matchedKeywords,
         overlapIds: speech.map((segment) => segment.id),
         transcript: speech.map((segment) => segment.text.trim()).filter(Boolean).join(' ')
@@ -263,6 +277,7 @@ function selectSegments(
       factors: item.factors,
       reasons: makeReasons(item.candidate, item.factors),
       transcript: item.candidate.transcript,
+      visual: item.candidate.visual,
       narration: buildNarration(input.goal, item.candidate, keywords, index)
     }))
 

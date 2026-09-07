@@ -48,6 +48,11 @@ export interface StorySegment {
   factors: PlanFactor[]
   reasons: string[]
   transcript: string
+  visual: {
+    motion: number
+    brightness: number
+    saturation: number
+  }
   narration?: string | undefined
 }
 

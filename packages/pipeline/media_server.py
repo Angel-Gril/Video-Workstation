@@ -173,6 +173,124 @@ def narration_drafts(plan: dict[str, Any], max_chars: int = 90) -> list[dict[str
     return entries
 
 
+def fcpxml_time(value: float, frame_rate: float) -> str:
+    rate = max(1, int(frame_rate))
+    return f"{max(0, round(value * rate))}/{rate}s"
+
+
+def xml_escape(value: Any) -> str:
+    return (
+        str(value)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
+
+
+def create_fcpxml(plan: dict[str, Any], output: Path) -> Path:
+    meta = plan.get("meta", {})
+    rate = max(1, int(meta.get("frameRate", 30)))
+    sections = ("video", "audio", "caption", "music")
+    media_paths = {str(entry["path"]) for section in sections for entry in plan.get(section, [])}
+    asset_ids = {path: f"asset-{index + 1}" for index, path in enumerate(sorted(media_paths))}
+    asset_nodes: list[str] = []
+    for path, asset_id in asset_ids.items():
+        try:
+            asset = probe(Path(path))
+        except PipelineError:
+            continue
+        asset_nodes.append(
+            f'<asset id="{asset_id}" name="{xml_escape(asset["name"])}" src="file:///{Path(path).as_posix()}" '
+            f'start="0s" duration="{fcpxml_time(asset["duration"], asset.get("frameRate") or rate)}" '
+            f'hasVideo="{0 if asset["kind"] == "audio" else 1}" hasAudio="{1 if asset.get("audioChannels") else 0}" />'
+        )
+
+    def asset_clip(entry: dict[str, Any]) -> str:
+        asset_id = asset_ids.get(str(entry["path"]), "")
+        return (
+            f'<asset-clip ref="{asset_id}" name="{xml_escape(entry.get("text") or entry["id"])}" '
+            f'offset="{fcpxml_time(entry["timelineStart"], rate)}" start="{fcpxml_time(entry["sourceStart"], rate)}" '
+            f'duration="{fcpxml_time(entry["duration"], rate)}"><note>{xml_escape(entry.get("text") or "")}</note></asset-clip>'
+        )
+
+    duration = max(
+        [0.0]
+        + [
+            float(entry["timelineStart"]) + float(entry["duration"])
+            for section in sections
+            for entry in plan.get(section, [])
+        ]
+    )
+    spine = "".join(asset_clip(entry) for entry in plan.get("video", []))
+    document = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<fcpxml version="1.10"><resources>{"".join(asset_nodes)}</resources>'
+        f'<library><event name="AI Video Workstation"><project name="{xml_escape(meta.get("name", "Project"))}">'
+        f'<sequence duration="{fcpxml_time(duration, rate)}"><spine>{spine}</spine></sequence>'
+        '</project></event></library></fcpxml>'
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(document, encoding="utf-8")
+    return output
+
+
+def create_jianying_draft(plan: dict[str, Any], output: Path) -> Path:
+    meta = plan.get("meta", {})
+    rate = max(1, int(meta.get("frameRate", 30)))
+    micro = 1_000_000
+    tracks: list[dict[str, Any]] = [
+        {"id": "track-video", "type": "video", "segments": []},
+        {"id": "track-audio", "type": "audio", "segments": []},
+        {"id": "track-caption", "type": "text", "segments": []},
+    ]
+    materials: list[dict[str, Any]] = []
+    asset_ids: dict[str, str] = {}
+    sections = {
+        "video": "track-video",
+        "audio": "track-audio",
+        "music": "track-audio",
+        "caption": "track-caption",
+    }
+    for section, track_id in sections.items():
+        for index, entry in enumerate(plan.get(section, [])):
+            path = str(entry["path"])
+            if path not in asset_ids:
+                asset_ids[path] = f"material-{len(asset_ids) + 1}"
+                materials.append({"id": asset_ids[path], "path": path, "name": Path(path).name})
+            source = round(float(entry["sourceStart"]) * micro)
+            target = round(float(entry["timelineStart"]) * micro)
+            duration = round(float(entry["duration"]) * micro)
+            tracks[0 if track_id == "track-video" else 1 if track_id == "track-audio" else 2][
+                "segments"
+            ].append({
+                "id": f"{track_id}-{index + 1}",
+                "material_id": asset_ids[path],
+                "target_timerange": {"start": target, "duration": duration},
+                "source_timerange": {"start": source, "duration": duration},
+                "text": entry.get("text") or None,
+                "transition_in": entry.get("transitionIn") or "none",
+                "transition_out": entry.get("transitionOut") or "none",
+                "volume": entry.get("volume", 1),
+            })
+    draft = {
+        "format": "jianying-compatible-draft/1",
+        "project": {
+            "name": meta.get("name", "AI Video Workstation"),
+            "width": meta.get("width", 1920),
+            "height": meta.get("height", 1080),
+            "fps": rate,
+            "duration": round(max([0.0] + [entry["timelineStart"] + entry["duration"] for section in sections for entry in plan.get(section, [])]) * micro),
+        },
+        "materials": materials,
+        "tracks": tracks,
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8")
+    return output
+
+
 def audio_waveform(path: Path, points: int = 900) -> list[float]:
     points = max(80, min(2400, int(points)))
     with tempfile.TemporaryDirectory(prefix="video-workstation-wave-") as folder:
@@ -825,6 +943,15 @@ def run_export_job(job_id: str, plan: dict[str, Any], output: Path) -> None:
         update_job(job_id, status="failed", error=str(error))
 
 
+def run_metadata_job(job_id: str, plan: dict[str, Any], output: Path, kind: str) -> None:
+    try:
+        update_job(job_id, status="running", progress=0)
+        result_output = create_fcpxml(plan, output) if kind == "fcpxml" else create_jianying_draft(plan, output)
+        update_job(job_id, status="completed", progress=1, result={"output": str(result_output.resolve().as_posix())})
+    except Exception as error:
+        update_job(job_id, status="failed", error=str(error))
+
+
 def load_project_document() -> dict[str, Any] | None:
     if not PROJECT_FILE.exists():
         return None
@@ -1039,6 +1166,27 @@ class MediaHandler(BaseHTTPRequestHandler):
                 if not isinstance(plan, dict):
                     raise BadRequestError("Export plan is required")
                 self.send_json(HTTPStatus.OK, {"drafts": narration_drafts(plan)})
+                return
+            if parsed.path == "/api/export/metadata":
+                plan = body.get("plan")
+                if not isinstance(plan, dict):
+                    raise BadRequestError("Export plan is required")
+                kind = str(body.get("kind", ""))
+                if kind not in ("fcpxml", "jianying"):
+                    raise BadRequestError("Unsupported metadata format")
+                output = Path(str(body.get("output", ""))).expanduser().resolve()
+                if not output.name:
+                    raise BadRequestError("Output file is required")
+                job_id = uuid.uuid4().hex
+                with jobs_lock:
+                    jobs[job_id] = {
+                        "kind": f"export-{kind}",
+                        "status": "queued",
+                        "progress": 0,
+                        "output": str(output),
+                    }
+                job_executor.submit(run_metadata_job, job_id, plan, output, kind)
+                self.send_json(HTTPStatus.ACCEPTED, {"jobId": job_id, **jobs[job_id]})
                 return
             self.send_error_json(HTTPStatus.NOT_FOUND, "Not found")
         except PipelineError as error:

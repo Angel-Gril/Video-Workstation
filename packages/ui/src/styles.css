@@ -194,6 +194,25 @@ h2 { font-size: 12px; color: #c9c9d1; font-weight: 600; }
 .plan-actions, .plan-bulk { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .asset-actions button, .plan-actions button { padding: 5px 4px; font-size: 11px; }
 
+.visual-summary {
+  border: 1px solid #33343c;
+  border-radius: 5px;
+  background: #1a1b20;
+  padding: 8px;
+}
+
+.visual-summary strong {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 11px;
+}
+
+.visual-summary span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .signal-item {
   width: 100%;
   text-align: left;
@@ -573,6 +592,12 @@ h2 { font-size: 12px; color: #c9c9d1; font-weight: 600; }
   color: var(--muted);
   font-size: 10px;
   line-height: 1.4;
+}
+
+.export-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .statusbar {
