@@ -71,6 +71,7 @@ export interface MediaAsset {
   codec?: string | undefined
   videoStreamIndex?: number | undefined
   audioStreamIndex?: number | undefined
+  previewPath?: string | undefined
 }
 
 export interface TimelineClip {

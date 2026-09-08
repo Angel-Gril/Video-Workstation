@@ -122,6 +122,7 @@ function transitionLabel(kind: 'cut' | 'none' | TransitionKind): string {
 }
 
 function videoCapabilityText(asset: MediaAsset): string {
+  if (asset.previewPath) return ' · 浏览器兼容'
   if (asset.kind !== 'video') return ''
   return asset.width && asset.height
     ? asset.width >= asset.height
@@ -402,6 +403,7 @@ export function Workstation() {
   const [narrationVoice, setNarrationVoice] = useState(narrationVoices[0]!.id)
   const [narrationRate, setNarrationRate] = useState(narrationRates[1]!.id)
   const [narrationDucking, setNarrationDucking] = useState(true)
+  const [proxyingAssetId, setProxyingAssetId] = useState<string | null>(null)
   const [previewSource, setPreviewSource] = useState<PreviewSource>({ mode: 'media', mediaId: null })
   const [previewTime, setPreviewTime] = useState(0)
   const [playing, setPlaying] = useState(false)
@@ -980,6 +982,43 @@ export function Workstation() {
       setMessage(error instanceof Error ? error.message : '导入素材失败')
     } finally {
       setImporting(false)
+    }
+  }
+
+  async function createPreviewProxy(asset: MediaAsset) {
+    if (asset.kind !== 'video') {
+      setMessage('只有视频素材需要浏览器兼容预览')
+      return
+    }
+    try {
+      setProxyingAssetId(asset.id)
+      setMessage('正在生成浏览器兼容预览...')
+      const response = await fetch('/api/media/preview-proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: asset.path })
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error ?? '浏览器兼容预览生成失败')
+      const previewPath = String(data.output)
+      const next = updateMetaTime({
+        ...project,
+        media: project.media.map((item) => item.id === asset.id
+          ? { ...item, previewPath }
+          : item)
+      })
+      dispatch({
+        id: uid('cmd-preview-proxy'),
+        kind: 'project.set',
+        payload: { project: next }
+      }, next)
+      if (previewSource.mediaId === asset.id) setPreviewSource((current) => ({ ...current }))
+      setPreviewError(null)
+      setMessage('浏览器兼容预览已生成')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '浏览器兼容预览生成失败')
+    } finally {
+      setProxyingAssetId(null)
     }
   }
 
@@ -2590,6 +2629,14 @@ export function Workstation() {
                       {videoCapabilityText(asset) ? <span className="asset-capability">{videoCapabilityText(asset)}</span> : null}
                     </div>
                     <div className="asset-actions">
+                      {asset.kind === 'video' && !asset.previewPath ? (
+                        <button
+                          onClick={(event) => { event.stopPropagation(); void createPreviewProxy(asset) }}
+                          disabled={proxyingAssetId === asset.id}
+                        >
+                          {proxyingAssetId === asset.id ? '转换中' : '兼容'}
+                        </button>
+                      ) : null}
                       <button onClick={(event) => { event.stopPropagation(); addAssetToTimeline(asset) }}>时间线</button>
                       <button onClick={(event) => {
                         event.stopPropagation()
@@ -2775,7 +2822,7 @@ export function Workstation() {
                 <video
                   ref={previewRef}
                   className="preview-video"
-                  src={`/api/media/stream?path=${encodeURIComponent(previewAsset.path)}`}
+                  src={`/api/media/stream?path=${encodeURIComponent(previewAsset.previewPath ?? previewAsset.path)}`}
                   style={activePreviewStyle}
                   controls={false}
                   playsInline

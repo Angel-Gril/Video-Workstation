@@ -27,6 +27,9 @@ export function validateProject(project: Project): ValidationIssue[] {
     if (asset.duration < 0) {
       issues.push({ path: `${path}.duration`, message: 'Duration cannot be negative' })
     }
+    if (asset.previewPath !== undefined && typeof asset.previewPath !== 'string') {
+      issues.push({ path: `${path}.previewPath`, message: 'Preview path must be a string' })
+    }
   }
 
   const trackIds = new Set<string>()

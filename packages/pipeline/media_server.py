@@ -39,6 +39,7 @@ WHISPER_MODEL_NAME = "base"
 TTS_VOICE = os.environ.get("WORKSTATION_TTS_VOICE", "zh-CN-XiaoxiaoNeural")
 TTS_RATE = os.environ.get("WORKSTATION_TTS_RATE", "+0%")
 TTS_OUTPUT_DIR = Path(os.environ.get("WORKSTATION_TTS_DIR", ".aiwork/tts")).resolve()
+PREVIEW_DIR = Path(os.environ.get("WORKSTATION_PREVIEW_DIR", ".aiwork/preview")).resolve()
 whisper_lock = threading.Lock()
 whisper_model: Any | None = None
 jobs: dict[str, dict[str, Any]] = {}
@@ -355,6 +356,32 @@ def video_thumbnails(path: Path, count: int = 10, width: int = 160) -> list[dict
                 "dataUrl": "data:image/jpeg;base64," + base64.b64encode(file.read_bytes()).decode("ascii")
             })
     return thumbs
+
+
+def create_preview_proxy(path: Path) -> dict[str, Any]:
+    PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+    output = PREVIEW_DIR / f"{path.stem}-{uuid.uuid4().hex[:10]}.mp4"
+    command = [
+        ffmpeg_binary(),
+        "-hide_banner", "-y",
+        "-i", str(path),
+        "-map", "0:v:0?",
+        "-map", "0:a:0?",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "24",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        str(output),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
+    if result.returncode != 0:
+        raise PipelineError(result.stderr.strip()[-2000:] or "Preview proxy failed")
+    if not output.exists() or output.stat().st_size == 0:
+        raise PipelineError("Preview proxy produced an empty file")
+    return {"source": str(path), "output": str(output.resolve()), "asset": probe(output)}
 
 
 def visual_signals(path: Path, samples: int = 16) -> list[dict[str, Any]]:
@@ -1702,6 +1729,10 @@ class MediaHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/media/probe":
                 path = self.resolve_path(str(body.get("path", "")))
                 self.send_json(HTTPStatus.OK, probe(path))
+                return
+            if parsed.path == "/api/media/preview-proxy":
+                path = self.resolve_path(str(body.get("path", "")))
+                self.send_json(HTTPStatus.OK, create_preview_proxy(path))
                 return
             if parsed.path == "/api/media/transcode":
                 source = self.resolve_path(str(body.get("source", "")))
