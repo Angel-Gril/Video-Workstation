@@ -3,6 +3,22 @@ import { createNarrativePlan } from '@aivideo/ai'
 import type { Command, Project } from '@aivideo/core'
 import type { PlannerInput, PlannerOptions } from '@aivideo/ai'
 
+function withDefaultClipShapes(project: Project): Project {
+  return {
+    ...project,
+    timeline: {
+      ...project.timeline,
+      tracks: project.timeline.tracks.map((track) => ({
+        ...track,
+        clips: track.clips.map((clip) => ({
+          ...clip,
+          effects: Array.isArray(clip.effects) ? clip.effects : []
+        }))
+      }))
+    }
+  }
+}
+
 interface ExecuteRequest {
   project: Project
   commands?: Command[]
@@ -39,7 +55,7 @@ function executeProject(request: ExecuteRequest) {
   }
   if (!Array.isArray(request.commands)) fail('Agent bridge commands must be an array')
   try {
-    const states = [request.project]
+    const states = [withDefaultClipShapes(request.project)]
     for (const command of request.commands) {
       states.push(applyCommand(states[states.length - 1]!, command))
     }
@@ -52,7 +68,7 @@ function executeProject(request: ExecuteRequest) {
     if (inverseCommands.length !== request.commands.length) {
       fail('Agent command batch cannot be inverted')
     }
-    const next = states[states.length - 1]!
+    const next = withDefaultClipShapes(states[states.length - 1]!)
     const inverse = {
       id: `agent-batch-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       kind: 'command.batch' as const,

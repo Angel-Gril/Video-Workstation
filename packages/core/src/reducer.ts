@@ -36,6 +36,23 @@ function withTimeline(project: Project, timeline: Timeline): Project {
   return { ...project, timeline }
 }
 
+function sanitizedClip(value: TimelineClip): TimelineClip {
+  return {
+    ...value,
+    transform: isTransform(value.transform) ? value.transform : {
+      scale: 1,
+      x: 0,
+      y: 0,
+      rotation: 0,
+      opacity: 1,
+      brightness: 1,
+      contrast: 1,
+      saturation: 1
+    },
+    effects: Array.isArray(value.effects) ? value.effects : []
+  }
+}
+
 function normalizeNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
 }
@@ -228,15 +245,16 @@ function apply(project: Project, command: Command): Project {
     case 'clip.add': {
       const clip = command.payload.clip
       if (!isClip(clip)) throw new CommandError('Invalid clip')
-      const track = trackOf(project, clip.trackId)
+      const safeClip = sanitizedClip(clip)
+      const track = trackOf(project, safeClip.trackId)
       if (track.clips.some((item) => item.id === clip.id)) {
         throw new CommandError('Clip id already exists')
       }
-      if (!project.media.some((asset) => asset.id === clip.mediaId)) {
+      if (!project.media.some((asset) => asset.id === safeClip.mediaId)) {
         throw new CommandError('Media asset not found')
       }
-      if (clip.duration <= 0) throw new CommandError('Clip duration must be positive')
-      return replaceTrack(project, { ...track, clips: [...track.clips, clip] })
+      if (safeClip.duration <= 0) throw new CommandError('Clip duration must be positive')
+      return replaceTrack(project, { ...track, clips: [...track.clips, safeClip] })
     }
     case 'clip.remove': {
       const clipId = command.payload.clipId
@@ -343,7 +361,10 @@ function apply(project: Project, command: Command): Project {
         }
         if (clip.duration <= 0) throw new CommandError('Restored clip duration must be positive')
       }
-      return replaceTrack(project, { ...track, clips: clips as TimelineClip[] })
+      return replaceTrack(project, {
+        ...track,
+        clips: (clips as TimelineClip[]).map(sanitizedClip)
+      })
     }
     case 'clip.transform': {
       const clipId = command.payload.clipId

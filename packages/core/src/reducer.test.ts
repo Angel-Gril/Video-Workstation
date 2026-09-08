@@ -189,4 +189,31 @@ describe('timeline reducer', () => {
     }
     expect(validateProject(broken).some((issue) => issue.message.includes('Source'))).toBe(true)
   })
+
+  it('normalizes malformed external clip effects and transforms on add', () => {
+    const malformed: TimelineClip = {
+      ...clip,
+      id: 'clip-malformed',
+      transform: 'invalid' as unknown as TimelineClip['transform'],
+      effects: 'invalid' as unknown as TimelineClip['effects']
+    }
+    const next = applyCommand(project, {
+      id: 'cmd-add-malformed',
+      kind: 'clip.add',
+      payload: { clip: malformed }
+    })
+
+    const added = next.timeline.tracks[0]!.clips.find((item) => item.id === malformed.id)!
+    expect(added.transform).toEqual({
+      scale: 1,
+      x: 0,
+      y: 0,
+      rotation: 0,
+      opacity: 1,
+      brightness: 1,
+      contrast: 1,
+      saturation: 1
+    })
+    expect(added.effects).toEqual([])
+  })
 })
