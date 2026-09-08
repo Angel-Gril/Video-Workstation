@@ -997,6 +997,13 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
             position_expr = keyframe_expr(clip, "position", 0)
             rotation_expr = keyframe_expr(clip, "rotation", 0)
             opacity_expr = keyframe_expr(clip, "opacity", 1)
+            opacity_keyframes = effect_keyframes(clip, "opacity")
+            alpha_factors: list[str] = []
+            if opacity_expr and opacity_keyframes:
+                opacity_time = f"N/{frame_rate:.9f}"
+                opacity_factor = keyframe_expr(clip, "opacity", 1, opacity_time)
+                if opacity_factor:
+                    alpha_factors.append(f"min(1,max(0,{opacity_factor}))")
             if scale_expr:
                 scale_expr = replace_time_var(clamp_expr(scale_expr, .05, 10), "T")
                 chain.append(
@@ -1019,11 +1026,9 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
                 opacity = clamp(float(transform.get("opacity", 1)), 0, 1)
             transition_in, transition_out = directional_transition(clip)
             clip_transition_duration = transition_duration_of(clip)
-            needs_alpha_mask = opacity < 1 or transition_in != "none" or transition_out != "none"
+            needs_alpha_mask = bool(alpha_factors) or opacity < 1 or transition_in != "none" or transition_out != "none"
             if needs_alpha_mask:
                 chain.append("format=rgba")
-                if opacity < 1:
-                    chain.append(f"colorchannelmixer=aa={opacity}")
             for edge, edge_kind in (("in", transition_in), ("out", transition_out)):
                 if edge_kind in ("zoom-in", "blur-in"):
                     transition_duration = min(clip_transition_duration, duration * .25)
@@ -1071,15 +1076,19 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
                         )
             if transition_in != "none":
                 transition_duration = min(clip_transition_duration, duration * .25)
-                chain.extend([
-                    "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
-                    f"a='{escape_filter_commas(wipe_alpha_expression(transition_in, 'in', duration, transition_duration, frame_rate))}'"
-                ])
+                alpha_factors.append(
+                    f"({wipe_alpha_expression(transition_in, 'in', duration, transition_duration, frame_rate)})/255"
+                )
             if transition_out != "none":
                 transition_duration = min(clip_transition_duration, duration * .25)
+                alpha_factors.append(
+                    f"({wipe_alpha_expression(transition_out, 'out', duration, transition_duration, frame_rate)})/255"
+                )
+            if alpha_factors:
+                alpha_expression = "255*" + "*".join(f"({factor})" for factor in alpha_factors)
                 chain.extend([
                     "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
-                    f"a='{escape_filter_commas(wipe_alpha_expression(transition_out, 'out', duration, transition_duration, frame_rate))}'"
+                    f"a='{escape_filter_commas(alpha_expression)}'"
                 ])
             brightness = sample_effect_value(
                 clip, "brightness", clamp(float(transform.get("brightness", 1)), -1, 3)
