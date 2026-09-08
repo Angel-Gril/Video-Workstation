@@ -57,7 +57,7 @@ export interface StorySegment {
 }
 
 export interface PlanFactor {
-  id: 'scene' | 'speech' | 'intent' | 'duration' | 'visual'
+  id: 'scene' | 'speech' | 'intent' | 'duration' | 'visual' | 'keyword'
   label: string
   value: number
   weight: number
@@ -71,11 +71,22 @@ export interface PlanStrategy {
   weights: Record<PlanFactor['id'], number>
 }
 
+export interface PlanWeights {
+  scene?: number | undefined
+  speech?: number | undefined
+  intent?: number | undefined
+  duration?: number | undefined
+  visual?: number | undefined
+  keyword?: number | undefined
+}
+
 export interface PlannerOptions {
   videoTrackId?: string
   captionTrackId?: string
   narrationTrackId?: string
   strategyId?: PlanStrategy['id']
+  candidateLimit?: number | undefined
+  weights?: PlanWeights | undefined
 }
 
 export interface PlanCommand {
@@ -114,5 +125,10 @@ export interface NarrativePlan {
   }
   input: PlannerInput
   options: PlannerOptions
+  weightSummary: {
+    normalized: Record<PlanFactor['id'], number>
+    overrides: PlanWeights
+  }
+  candidateCount: number
   commands: PlanCommand[]
 }

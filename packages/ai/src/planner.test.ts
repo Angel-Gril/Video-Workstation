@@ -101,4 +101,46 @@ describe('narrative planner', () => {
     expect(factor?.detail).toContain('0.72')
     expect(plan.segments[0]?.visual).toEqual({ motion: 0.81, brightness: 0.72, saturation: 0.58 })
   })
+
+  it('normalizes custom multi-objective weights and explains keyword evidence', () => {
+    const plan = createNarrativePlan({
+      goal: 'highlights',
+      targetSeconds: 4,
+      transcript: [{ id: 's1', mediaId: 'media-1', start: 0, end: 4, text: '这里是重点画面' }],
+      scenes: [{ mediaId: 'media-1', start: 0, end: 4, score: 0.8 }],
+      instruction: '重点'
+    }, {
+      candidateLimit: 12,
+      weights: { scene: 2, keyword: 3 }
+    })
+
+    const summary = plan.weightSummary.normalized
+    expect(Object.values(summary).reduce((total, value) => total + value, 0)).toBeCloseTo(1)
+    expect(summary.keyword).toBeGreaterThan(summary.scene)
+    expect(plan.candidateCount).toBeGreaterThan(0)
+    expect(plan.segments[0]?.factors.some((factor) =>
+      factor.id === 'keyword' && factor.detail.includes('重点')
+    )).toBe(true)
+  })
+
+  it('limits ranking candidates while keeping chronological output', () => {
+    const scenes = Array.from({ length: 80 }, (_, index) => ({
+      mediaId: `media-${index % 3}`,
+      start: index * 5,
+      end: index * 5 + 4,
+      score: (index % 10) / 10
+    }))
+    const plan = createNarrativePlan({
+      goal: 'summary',
+      targetSeconds: 4,
+      transcript: [],
+      scenes
+    }, { candidateLimit: 8 })
+
+    expect(plan.candidateCount).toBe(80)
+    expect(plan.segments.length).toBeLessThanOrEqual(8)
+    expect(plan.segments.every((segment, index) =>
+      index === 0 || segment.source.start >= plan.segments[index - 1]!.source.end
+    )).toBe(true)
+  })
 })

@@ -23,7 +23,9 @@ import {
 import {
   createNarrativePlan,
   createSegmentPlan,
+  planStrategies,
   type NarrativePlan,
+  type PlanWeights,
   type PlanStrategy,
   type SceneBoundary,
   type SpeechSegment,
@@ -32,8 +34,18 @@ import {
 
 type PlannerGoal = 'summary' | 'highlights' | 'tutorial'
 type ExportQuality = 'fast' | 'balanced' | 'quality'
+type DeliveryPresetId = 'short' | 'tutorial' | 'archive' | 'review'
 type MetadataFormat = 'fcpxml' | 'jianying'
 type ClipDragMode = 'move' | 'trim-start' | 'trim-end'
+type WorkstationDeliveryPreset = {
+  targetSeconds: number
+  width: number
+  height: number
+  frameRate: number
+  quality: ExportQuality
+  ducking: boolean
+  exportName: string
+}
 
 interface Thumbnail {
   time: number
@@ -248,6 +260,47 @@ const exportQualityMap: Record<ExportQuality, { crf: number; preset: string; lab
   quality: { crf: 17, preset: 'slow', label: '高画质' }
 }
 
+const weightLabels: Record<keyof PlanWeights, string> = {
+  scene: '场景变化',
+  speech: '语音密度',
+  intent: '意图命中',
+  duration: '片段节奏',
+  visual: '画面信号',
+  keyword: '标题关键词'
+}
+
+const deliveryPresets: Array<{
+  id: DeliveryPresetId
+  label: string
+  detail: string
+  apply: WorkstationDeliveryPreset
+}> = [
+  {
+    id: 'short',
+    label: '短视频 1080p',
+    detail: '30 秒 · 1080p · 30fps · 快速',
+    apply: { targetSeconds: 30, width: 1920, height: 1080, frameRate: 30, quality: 'fast', ducking: true, exportName: 'exports/短视频.mp4' }
+  },
+  {
+    id: 'tutorial',
+    label: '教程讲解',
+    detail: '120 秒 · 1080p · 30fps · 均衡',
+    apply: { targetSeconds: 120, width: 1920, height: 1080, frameRate: 30, quality: 'balanced', ducking: true, exportName: 'exports/教程.mp4' }
+  },
+  {
+    id: 'archive',
+    label: '长视频概要',
+    detail: '300 秒 · 720p · 24fps · 均衡',
+    apply: { targetSeconds: 300, width: 1280, height: 720, frameRate: 24, quality: 'balanced', ducking: false, exportName: 'exports/概要.mp4' }
+  },
+  {
+    id: 'review',
+    label: '快速审阅',
+    detail: '60 秒 · 480p · 24fps · 快速',
+    apply: { targetSeconds: 60, width: 854, height: 480, frameRate: 24, quality: 'fast', ducking: false, exportName: 'exports/审阅.mp4' }
+  }
+]
+
 export function Workstation() {
   const [project, setProjectState] = useState<Project>(makeInitialProject)
   const [history, setHistory] = useState<CommandHistoryEntry[]>([])
@@ -255,6 +308,8 @@ export function Workstation() {
   const [plan, setPlan] = useState<NarrativePlan | null>(null)
   const [planStrategy, setPlanStrategy] = useState<PlanStrategy['id']>('balanced')
   const [planGoal, setPlanGoal] = useState<PlannerGoal>('summary')
+  const [planCandidateLimit, setPlanCandidateLimit] = useState(48)
+  const [planWeights, setPlanWeights] = useState<PlanWeights>({})
   const [reviewedSegmentIds, setReviewedSegmentIds] = useState<Set<string>>(new Set())
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null)
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null)
@@ -458,6 +513,27 @@ export function Workstation() {
     const threshold = Math.max(6 / zoom, .035)
     const snapped = targets.find((point) => Math.abs(point - time) <= threshold)
     return snapped === undefined ? null : Math.max(0, snapped)
+  }
+
+  function applyDeliveryPreset(preset: typeof deliveryPresets[number]) {
+    const next = updateMetaTime({
+      ...project,
+      meta: { ...project.meta, width: preset.apply.width, height: preset.apply.height, frameRate: preset.apply.frameRate },
+      narrationSettings: {
+        ...project.narrationSettings,
+        audioDucking: { ...project.narrationSettings?.audioDucking, enabled: preset.apply.ducking }
+      }
+    })
+    dispatch({
+      id: uid('cmd-preset'),
+      kind: 'project.set',
+      payload: { project: next }
+    }, next)
+    setNarrationDucking(preset.apply.ducking)
+    setTargetSeconds(preset.apply.targetSeconds)
+    setExportQuality(preset.apply.quality)
+    setExportName(preset.apply.exportName)
+    setMessage(`已应用交付预设：${preset.label}`)
   }
 
   function snapTime(time: number, ignoreClipIds: string[] = []) {
@@ -948,7 +1024,11 @@ export function Workstation() {
         scenes,
         visualSignals: visualSignals.length > 0 ? visualSignals : undefined,
         instruction: instruction.trim() || undefined
-      }, { strategyId: planStrategy })
+      }, {
+        strategyId: planStrategy,
+        candidateLimit: planCandidateLimit,
+        weights: planWeights
+      })
       setPlan(generated)
       setNarrationText(generated.segments.map((segment) => segment.narration).filter(Boolean).join('\n'))
       setReviewedSegmentIds(new Set())
@@ -968,7 +1048,9 @@ export function Workstation() {
     const regenerated = createNarrativePlan(plan.input, {
       videoTrackId: plan.options.videoTrackId ?? 'track-video',
       captionTrackId: plan.options.captionTrackId ?? 'track-caption',
-      strategyId
+      strategyId,
+      candidateLimit: plan.options.candidateLimit ?? planCandidateLimit,
+      weights: plan.options.weights
     })
     setPlan(regenerated)
     setPlanStrategy(strategyId)
@@ -1916,6 +1998,39 @@ export function Workstation() {
                 }}
               />
             </label>
+            <div className="weight-panel">
+              <div className="panel-row">
+                <span>权重调优</span>
+                <button onClick={() => setPlanWeights({})}>重置</button>
+              </div>
+              {(Object.keys(weightLabels) as Array<keyof PlanWeights>).map((weightId) => (
+                <label key={weightId} className="range">
+                  <span>{weightLabels[weightId]}</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={10}
+                    step={0.1}
+                    value={planWeights[weightId] ?? defaultStrategyWeight(weightId, planStrategy)}
+                    onChange={(event) => setPlanWeights((current) => ({
+                      ...current,
+                      [weightId]: Number(event.target.value)
+                    }))}
+                  />
+                  <strong>{(planWeights[weightId] ?? defaultStrategyWeight(weightId, planStrategy)).toFixed(1)}</strong>
+                </label>
+              ))}
+            </div>
+            <label className="field">
+              <span>候选上限</span>
+              <input
+                type="number"
+                min={6}
+                max={240}
+                value={planCandidateLimit}
+                onChange={(event) => setPlanCandidateLimit(clamp(Math.round(Number(event.target.value) || 48), 6, 240))}
+              />
+            </label>
             <div className="asset-list">
               {project.media.map((asset) => {
                 const speechCount = (speechByAsset.get(asset.id) ?? []).length
@@ -2329,6 +2444,14 @@ export function Workstation() {
                 <p className="plan-summary">
                   {plan.selectedIds.length}/{plan.segments.length} · {plan.selectedDuration.toFixed(2)}s / 目标 {plan.targetSeconds}s
                 </p>
+                <p className="plan-summary">
+                  候选池 {plan.candidateCount} · 权重 {Object.entries(plan.weightSummary.normalized)
+                    .filter(([, value]) => value > 0)
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 3)
+                    .map(([id, value]) => `${weightLabels[id as keyof PlanWeights]} ${Math.round(value * 100)}%`)
+                    .join(' · ')}
+                </p>
                 <div className="plan-list">
                   {plan.segments.map((segment) => {
                     const accepted = plan.selectedIds.includes(segment.id)
@@ -2529,6 +2652,18 @@ export function Workstation() {
 
           <section className="panel-section">
             <div className="section-head"><h2>导出设置</h2></div>
+            <div className="preset-grid">
+              {deliveryPresets.map((preset) => (
+                <button
+                  key={preset.id}
+                  title={preset.detail}
+                  onClick={() => applyDeliveryPreset(preset)}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            <p className="export-note">预设同步调整方案时长、交付规格与混音避让。</p>
             <label className="field">
               <span>画质</span>
               <select value={exportQuality} onChange={(event) => setExportQuality(event.target.value as ExportQuality)}>
@@ -2594,4 +2729,9 @@ export function Workstation() {
       </footer>
     </div>
   )
+}
+
+function defaultStrategyWeight(weightId: keyof PlanWeights, strategyId: PlanStrategy['id']): number {
+  const strategy = planStrategies.find((item) => item.id === strategyId) ?? planStrategies[0]!
+  return strategy.weights[weightId]
 }

@@ -5,6 +5,7 @@ import type {
   PlanStrategy,
   PlannerInput,
   PlannerOptions,
+  PlanWeights,
   StorySegment
 } from './types'
 
@@ -18,6 +19,7 @@ interface Candidate {
   durationScore: number
   visualScore: number
   matchedKeywords: string[]
+  titleKeywords: string[]
   overlapIds: string[]
   transcript: string
   visual: {
@@ -32,19 +34,19 @@ export const planStrategies: PlanStrategy[] = [
     id: 'balanced',
     label: '均衡',
     description: '兼顾画面变化、语音密度、意图命中和片段节奏。',
-    weights: { scene: 0.32, speech: 0.24, intent: 0.20, duration: 0.12, visual: 0.12 }
+    weights: { scene: 0.26, speech: 0.22, intent: 0.16, duration: 0.10, visual: 0.14, keyword: 0.12 }
   },
   {
     id: 'visual',
     label: '视觉优先',
     description: '优先保留画面变化明显的高能片段。',
-    weights: { scene: 0.40, speech: 0.12, intent: 0.12, duration: 0.12, visual: 0.24 }
+    weights: { scene: 0.32, speech: 0.10, intent: 0.10, duration: 0.10, visual: 0.24, keyword: 0.14 }
   },
   {
     id: 'speech',
     label: '叙述优先',
     description: '优先保留完整、密集的讲解与关键语句。',
-    weights: { scene: 0.12, speech: 0.44, intent: 0.22, duration: 0.10, visual: 0.12 }
+    weights: { scene: 0.10, speech: 0.36, intent: 0.18, duration: 0.08, visual: 0.10, keyword: 0.18 }
   }
 ]
 
@@ -94,6 +96,15 @@ function makeFactors(candidate: Candidate, weights: PlanStrategy['weights']): Pl
       detail: `运动 ${candidate.visual.motion.toFixed(2)} · 亮度 ${candidate.visual.brightness.toFixed(2)} · 饱和度 ${candidate.visual.saturation.toFixed(2)}`
     })
   }
+  if (candidate.titleKeywords.length > 0) {
+    factors.push({
+      id: 'keyword',
+      label: '标题关键词',
+      value: Math.min(1, candidate.titleKeywords.length * .28),
+      weight: weights.keyword ?? 0,
+      detail: `场景标题线索：${candidate.titleKeywords.join('、')}`
+    })
+  }
   return factors
 }
 
@@ -111,6 +122,9 @@ function makeReasons(candidate: Candidate, factors: PlanFactor[]): string[] {
   if (strongest && strongest.value > 0.2) reasons.push(`${strongest.label}：${strongest.detail}`)
   if (candidate.matchedKeywords.length > 0) {
     reasons.push(`与剪辑意图相关：${candidate.matchedKeywords.join('、')}`)
+  }
+  if (candidate.titleKeywords.length > 0) {
+    reasons.push(`场景关键词：${candidate.titleKeywords.join('、')}`)
   }
   if (candidate.durationScore < 0.25) reasons.push('片段过短或过长，建议先接受再手动裁剪')
   if (candidate.visualScore > 0) {
@@ -177,6 +191,10 @@ function candidateWindows(input: PlannerInput): Candidate[] {
       const duration = window.end - window.start
       const text = speech.map((segment) => segment.text).join(' ').toLowerCase()
       const matchedKeywords = keywords.filter((keyword) => text.includes(keyword))
+      const titleKeywords = keywords.filter((keyword) => (
+        text.includes(keyword) ||
+        [...keyword].some((char) => text.includes(char))
+      ))
       const overlappingSignals = (input.visualSignals ?? []).filter((signal) =>
         signal.mediaId === window.mediaId &&
         signal.start < window.end &&
@@ -208,11 +226,30 @@ function candidateWindows(input: PlannerInput): Candidate[] {
         visualScore,
         visual: { motion: visualScore, brightness, saturation },
         matchedKeywords,
+        titleKeywords,
         overlapIds: speech.map((segment) => segment.id),
         transcript: speech.map((segment) => segment.text.trim()).filter(Boolean).join(' ')
       }
     })
     .sort((a, b) => a.start - b.start)
+}
+
+const weightIds: Array<PlanFactor['id']> = ['scene', 'speech', 'intent', 'duration', 'visual', 'keyword']
+
+function normalizedWeights(
+  strategy: PlanStrategy['weights'],
+  overrides: PlanWeights | undefined
+): PlanStrategy['weights'] {
+  const maxRelativeWeight = 10
+  const values = weightIds.map((id) => ({
+    id,
+    value: clampNumber(overrides?.[id] ?? strategy[id], 0, maxRelativeWeight)
+  }))
+  const total = values.reduce((sum, item) => sum + item.value, 0)
+  if (total <= 0) {
+    return Object.fromEntries(weightIds.map((id) => [id, 0])) as PlanStrategy['weights']
+  }
+  return Object.fromEntries(values.map((item) => [item.id, item.value / total])) as PlanStrategy['weights']
 }
 
 function selectSegments(
@@ -382,14 +419,28 @@ export function createNarrativePlan(
   const resolvedOptions: PlannerOptions = {
     videoTrackId: options.videoTrackId ?? 'track-video',
     captionTrackId: options.captionTrackId ?? 'track-caption',
+    ...(options.narrationTrackId ? { narrationTrackId: options.narrationTrackId } : {}),
+    ...(options.strategyId ? { strategyId: options.strategyId } : {}),
+    candidateLimit: clampNumber(Math.round(options.candidateLimit ?? 48), 6, 240),
+    ...(options.weights ? { weights: options.weights } : {})
   }
   const strategies = planStrategies.map((strategy) => ({
     ...strategy,
     weights: { ...strategy.weights }
   }))
   const strategy = strategies.find((item) => item.id === options.strategyId) ?? strategies[0]!
-  const candidates = candidateWindows(input)
-  const selected = selectSegments(input, candidates, strategy.weights)
+  const weights = normalizedWeights(strategy.weights, options.weights)
+  const allCandidates = candidateWindows(input)
+  const candidates = allCandidates
+    .map((candidate) => {
+      const factors = makeFactors(candidate, weights)
+      return { candidate, score: scoreOf(factors) }
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, resolvedOptions.candidateLimit)
+    .map((item) => item.candidate)
+    .sort((a, b) => a.start - b.start)
+  const selected = selectSegments(input, candidates, weights)
 
   return {
     goal: input.goal,
@@ -412,6 +463,11 @@ export function createNarrativePlan(
     },
     input,
     options: resolvedOptions,
+    weightSummary: {
+      normalized: weights,
+      overrides: options.weights ?? {}
+    },
+    candidateCount: allCandidates.length,
     commands: commandsForSegments(
       selected.segments.filter((segment) => selected.selectedIds.includes(segment.id)),
       input,
@@ -423,9 +479,10 @@ export function createNarrativePlan(
 export function createSegmentPlan(
   plan: NarrativePlan,
   selectedIds: string[],
-  strategyId: PlanStrategy['id']
+  strategyId?: PlanStrategy['id']
 ): NarrativePlan {
-  const strategy = plan.strategies.find((item) => item.id === strategyId) ?? plan.strategies[0]!
+  const strategy = plan.strategies.find((item) => item.id === (strategyId ?? plan.strategyId)) ?? plan.strategies[0]!
+  const weights = plan.weightSummary?.normalized ?? strategy.weights
   const segments = plan.segments.map((segment) => ({
     ...segment,
     selected: selectedIds.includes(segment.id)
@@ -441,6 +498,11 @@ export function createSegmentPlan(
       0
     ).toFixed(3)),
     segments,
+    weightSummary: plan.weightSummary ?? {
+      normalized: strategy.weights,
+      overrides: plan.options.weights ?? {}
+    },
+    candidateCount: plan.candidateCount ?? plan.segments.length,
     commands: commandsForSegments(chosen, plan.input, plan.options)
   }
 }
