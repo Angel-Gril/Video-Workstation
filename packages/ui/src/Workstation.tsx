@@ -681,14 +681,20 @@ export function Workstation() {
     () => project.media.find((asset) => asset.id === previewSource.mediaId) ?? null,
     [project.media, previewSource]
   )
+  const timelineVideoClips = useMemo(
+    () => project.timeline.tracks
+      .filter((track) => track.kind === 'video' && !track.hidden)
+      .flatMap((track) => track.clips)
+      .sort((a, b) => a.timelineStart - b.timelineStart),
+    [project.timeline.tracks]
+  )
   const activeTimelineClip = useMemo(() => {
     if (previewSource.mode !== 'timeline' || !previewAsset) return null
-    return project.timeline.tracks
-      .flatMap((track) => track.clips)
+    return timelineVideoClips
       .find((clip) => clip.mediaId === previewAsset.id &&
         previewTime >= clip.timelineStart &&
         previewTime < clip.timelineStart + clip.duration) ?? null
-  }, [previewAsset, previewSource, previewTime, project.timeline.tracks])
+  }, [previewAsset, previewSource, previewTime, timelineVideoClips])
 
   const sourcePreviewTime = useMemo(() => {
     if (!previewAsset) return 0
@@ -937,7 +943,7 @@ export function Workstation() {
       dispatch(batchCommand(project, commands, `导入 ${asset.name}`), updateMetaTime(next))
       setAssetPath('')
       setSelectedAssetId(asset.id)
-      setPreviewSource({ mode: 'media', mediaId: asset.id })
+      setPreviewSource({ mode: 'timeline', mediaId: asset.id })
       setPreviewTime(0)
       setMessage(`${asset.name} 已导入并加入时间线`)
       void (asset.kind === 'video' ? loadThumbnails(asset) : loadWaveform(asset)).catch(() => undefined)
@@ -959,7 +965,7 @@ export function Workstation() {
       const command: Command = { id: uid('cmd-clip'), kind: 'clip.add', payload: { clip } }
       dispatch(command, updateMetaTime(applyCommand(project, command)))
       setSelectedAssetId(asset.id)
-      setPreviewSource({ mode: 'media', mediaId: asset.id })
+      setPreviewSource({ mode: 'timeline', mediaId: asset.id })
       setPreviewTime(0)
       setMessage('素材已加入时间线')
       void (asset.kind === 'video' ? loadThumbnails(asset) : loadWaveform(asset)).catch(() => undefined)
@@ -2202,6 +2208,28 @@ export function Workstation() {
     if (clip) setSelectedClipId(clip.id)
   }
 
+  function toggleTimelinePlayback() {
+    const video = previewRef.current
+    if (!video) return
+    if (!video.paused) {
+      video.pause()
+      return
+    }
+    setPreviewSource((current) => current.mode === 'timeline'
+      ? current
+      : { mode: 'timeline', mediaId: timelineVideoClips[0]?.mediaId ?? current.mediaId })
+    if (video.ended) {
+      const first = timelineVideoClips[0]
+      if (first) {
+        setPreviewSource({ mode: 'timeline', mediaId: first.mediaId })
+        setPreviewTime(first.timelineStart)
+      }
+    }
+    requestAnimationFrame(() => {
+      if (previewRef.current === video) void video.play()
+    })
+  }
+
   function togglePlayback() {
     const video = previewRef.current
     if (!video) return
@@ -2722,7 +2750,24 @@ export function Workstation() {
                   onTimeUpdate={(event) => {
                     const sourceTime = event.currentTarget.currentTime
                     if (previewSource.mode === 'timeline' && activeTimelineClip) {
-                      setPreviewTime(activeTimelineClip.timelineStart + sourceTime - activeTimelineClip.sourceStart)
+                      const next = activeTimelineClip.timelineStart + sourceTime - activeTimelineClip.sourceStart
+                      if (sourceTime >= activeTimelineClip.duration) {
+                      const upcoming = timelineVideoClips
+                        .filter((clip) => clip.timelineStart >= activeTimelineClip.timelineStart + activeTimelineClip.duration - .02)
+                        [0]
+                        if (upcoming) {
+                          setPreviewSource({ mode: 'timeline', mediaId: upcoming.mediaId })
+                          setPreviewTime(upcoming.timelineStart)
+                          event.currentTarget.currentTime = upcoming.sourceStart
+                          void event.currentTarget.play()
+                        } else {
+                          setPreviewTime(Math.max(next, duration))
+                          event.currentTarget.pause()
+                          setPlaying(false)
+                        }
+                      } else {
+                        setPreviewTime(next)
+                      }
                     } else if (previewSource.mode === 'media') {
                       setPreviewTime(sourceTime)
                     }
@@ -2739,10 +2784,22 @@ export function Workstation() {
               {activeNarration ? <div className="narration-overlay">{activeNarration}</div> : null}
             </div>
             <div className="transport">
-              <button onClick={() => setPreviewTime(0)} title="回到开头">
+              <button onClick={() => {
+                const first = timelineVideoClips[0]
+                if (previewSource.mode === 'timeline' && first) {
+                  setPreviewSource({ mode: 'timeline', mediaId: first.mediaId })
+                  setPreviewTime(first.timelineStart)
+                } else {
+                  setPreviewTime(0)
+                }
+              }} title="回到开头">
                 <svg viewBox="0 0 24 24"><path d="M19 5v14L8 12Z" /><path d="M5 5v14" /></svg>
               </button>
-              <button onClick={togglePlayback} disabled={!previewAsset} title={playing ? '暂停' : '播放'}>
+              <button
+                onClick={previewSource.mode === 'timeline' ? toggleTimelinePlayback : togglePlayback}
+                disabled={!previewAsset}
+                title={playing ? '暂停' : '播放'}
+              >
                 {playing
                   ? <svg viewBox="0 0 24 24"><path d="M7 5v14" /><path d="M17 5v14" /></svg>
                   : <svg viewBox="0 0 24 24"><path d="M7 5v14l12-7Z" /></svg>}
