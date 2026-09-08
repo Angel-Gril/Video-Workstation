@@ -22,6 +22,7 @@ export interface VisualSignal {
   brightness: number
   saturation: number
   motion: number
+  faceCoverage?: number | undefined
   objects: Array<{ name: string; score: number; box?: number[] | undefined }>
   labels?: string[] | undefined
 }

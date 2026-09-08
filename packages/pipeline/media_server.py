@@ -385,6 +385,8 @@ def visual_signals(path: Path, samples: int = 16) -> list[dict[str, Any]]:
             saturation = float(hsv[:, :, 1].mean()) / 255
             edges = cv2.Canny(gray, 80, 180)
             edge_density = float(np.count_nonzero(edges)) / max(1, edges.size)
+            hue = hsv[:, :, 0]
+            face_coverage = 0.0
             motion = 0.0
             if previous_gray is not None and previous_gray.shape == gray.shape:
                 motion = float(np.mean(np.abs(previous_gray.astype(np.int16) - gray.astype(np.int16)))) / 255
@@ -399,14 +401,50 @@ def visual_signals(path: Path, samples: int = 16) -> list[dict[str, Any]]:
             )
             for (x, y, width, height) in faces[:5]:
                 objects.append({"name": "人脸", "score": 0.9, "box": [int(x), int(y), int(width), int(height)]})
+                face_coverage += float(width * height) / max(1, gray.size)
+            face_coverage = min(1.0, face_coverage)
             if len(objects):
                 labels.append("人物")
+                labels.append("人物特写" if face_coverage >= .18 else "人物互动")
+                if len(objects) >= 2:
+                    labels.append("多人画面")
             if motion >= .08:
                 labels.append("运动")
             elif motion < .015:
                 labels.append("静态")
             if edge_density >= .16:
                 labels.append("画面细节")
+            sky_ratio = float(np.count_nonzero(
+                (hue[: gray.shape[0] // 3] >= 90) &
+                (hue[: gray.shape[0] // 3] <= 130) &
+                (hsv[: gray.shape[0] // 3, :, 1] >= 22) &
+                (hsv[: gray.shape[0] // 3, :, 2] >= 80)
+            )) / max(1, (gray.shape[0] // 3) * gray.shape[1])
+            if sky_ratio >= .3:
+                labels.append("天空")
+            vegetation_ratio = float(np.count_nonzero(
+                (hue >= 35) & (hue <= 85) &
+                (hsv[:, :, 1] >= 35) & (hsv[:, :, 2] >= 45)
+            )) / max(1, gray.size)
+            if vegetation_ratio >= .25:
+                labels.append("自然/植被")
+            lines = cv2.HoughLinesP(
+                edges,
+                rho=1,
+                theta=np.pi / 180,
+                threshold=30,
+                minLineLength=max(18, gray.shape[1] // 4),
+                maxLineGap=8,
+            )
+            vertical_lines = 0
+            for line in (lines[:40] if lines is not None else []):
+                x1, y1, x2, y2 = line[0].tolist()
+                angle = abs(np.degrees(np.arctan2(y2 - y1, x2 - x1)))
+                vertical_deviation = abs(90 - (angle if angle <= 90 else 180 - angle))
+                if vertical_deviation <= 12:
+                    vertical_lines += 1
+            if vertical_lines >= 3:
+                labels.append("建筑/结构")
             if saturation >= .32:
                 labels.append("高饱和")
             elif saturation <= .08:
@@ -422,6 +460,7 @@ def visual_signals(path: Path, samples: int = 16) -> list[dict[str, Any]]:
                 "brightness": round(brightness, 5),
                 "saturation": round(saturation, 5),
                 "motion": round(min(1.0, motion * 2.2), 5),
+                "faceCoverage": round(face_coverage, 5),
                 "objects": objects,
                 "labels": labels,
             })
@@ -628,7 +667,8 @@ def ffmpeg_brightness(expression: str) -> str:
 
 
 directional_transitions = {
-    "wipe-left", "wipe-right", "slide-left", "slide-right"
+    "wipe-left", "wipe-right", "wipe-up", "wipe-down", "slide-left", "slide-right",
+    "zoom-in", "blur-in"
 }
 
 
@@ -658,9 +698,9 @@ def transition_fade(
     transition_duration = transition_duration_of(clip)
     fade_in = min(transition_duration, duration * 0.25) if start != "none" else 0.0
     fade_out = min(transition_duration, duration * 0.25) if end != "none" else 0.0
-    if not video and start in ("fade", "dissolve"):
+    if not video and start in ("fade", "dissolve", "blur-in"):
         fade_in = min(0.25, fade_in)
-    if not video and end in ("fade", "dissolve"):
+    if not video and end in ("fade", "dissolve", "blur-in"):
         fade_out = min(0.25, fade_out)
     return fade_in, fade_out
 
@@ -688,6 +728,15 @@ def wipe_alpha_expression(
     if kind == "wipe-left":
         boundary = f"W*{progress}" if direction == "in" else f"W*(1-{progress})"
         return f"255*lt(X,{boundary})"
+    if kind == "wipe-right":
+        boundary = f"W*(1-{progress})" if direction == "in" else f"W*{progress}"
+        return f"255*gte(X,{boundary})"
+    if kind == "wipe-up":
+        boundary = f"H*{progress}" if direction == "in" else f"H*(1-{progress})"
+        return f"255*lt(Y,{boundary})"
+    if kind == "wipe-down":
+        boundary = f"H*(1-{progress})" if direction == "in" else f"H*{progress}"
+        return f"255*gte(Y,{boundary})"
     boundary = f"W*(1-{progress})" if direction == "in" else f"W*{progress}"
     return f"255*gte(X,{boundary})"
 
@@ -964,6 +1013,25 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
                 chain.append("format=rgba")
                 if opacity < 1:
                     chain.append(f"colorchannelmixer=aa={opacity}")
+            for edge, edge_kind in (("in", transition_in), ("out", transition_out)):
+                if edge_kind in ("zoom-in", "blur-in"):
+                    transition_duration = min(clip_transition_duration, duration * .25)
+                    progress_expr = (
+                        f"clip((N/{frame_rate:.9f})/{transition_duration:.9f},0,1)"
+                        if edge == "in"
+                        else f"clip((N/{frame_rate:.9f}-{max(0.0, duration - transition_duration):.9f})/{transition_duration:.9f},0,1)"
+                    )
+                    if edge_kind == "zoom-in":
+                        zoom_progress = progress_expr if edge == "in" else f"(1-{progress_expr})"
+                        chain.append(
+                            f"scale=w='max(2,trunc(iw*(1+0.18*({zoom_progress})))/2)*2':"
+                            f"h='max(2,trunc(ih*(1+0.18*({zoom_progress})))/2)*2':eval=frame"
+                        )
+                    else:
+                        blur_progress = progress_expr if edge == "in" else f"(1-{progress_expr})"
+                        chain.append(
+                            f"gblur=sigma='min(24,max(0,18*(1-{blur_progress})))':eval=frame"
+                        )
             if transition_in != "none":
                 transition_duration = min(clip_transition_duration, duration * .25)
                 chain.extend([

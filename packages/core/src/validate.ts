@@ -6,6 +6,10 @@ export interface ValidationIssue {
 }
 
 const trackKinds = new Set(['video', 'audio', 'caption', 'music'])
+const transitionKinds = new Set([
+  'none', 'fade', 'dissolve', 'wipe-left', 'wipe-right', 'wipe-up', 'wipe-down',
+  'slide-left', 'slide-right', 'zoom-in', 'blur-in'
+])
 
 export function validateProject(project: Project): ValidationIssue[] {
   const issues: ValidationIssue[] = []
@@ -82,6 +86,21 @@ function validateClip(
   }
   if (clip.timelineStart < 0) {
     issues.push({ path: `${path}.timelineStart`, message: 'Timeline start cannot be negative' })
+  }
+  for (const key of ['transitionIn', 'transitionOut'] as const) {
+    const value = clip[key]
+    if (value !== undefined && !transitionKinds.has(value)) {
+      issues.push({ path: `${path}.${key}`, message: 'Unknown transition kind' })
+    }
+  }
+  if (
+    clip.transitionDuration !== undefined &&
+    (!Number.isFinite(clip.transitionDuration) || clip.transitionDuration < 0 || clip.transitionDuration > 2)
+  ) {
+    issues.push({
+      path: `${path}.transitionDuration`,
+      message: 'Transition duration must be between 0 and 2 seconds'
+    })
   }
   if (clip.audioProcessing) {
     for (const key of ['denoise', 'deess'] as const) {

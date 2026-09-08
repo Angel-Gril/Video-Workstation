@@ -105,8 +105,12 @@ const transitionLabels: Record<Exclude<TransitionKind, 'none'>, string> = {
   dissolve: '叠化',
   'wipe-left': '左向擦除',
   'wipe-right': '右向擦除',
+  'wipe-up': '上向擦除',
+  'wipe-down': '下向擦除',
   'slide-left': '左向滑动',
-  'slide-right': '右向滑动'
+  'slide-right': '右向滑动',
+  'zoom-in': '放大转场',
+  'blur-in': '模糊转场'
 }
 
 function transitionLabel(kind: 'cut' | 'none' | TransitionKind): string {
@@ -3010,8 +3014,12 @@ export function Workstation() {
                     <option value="dissolve">叠化</option>
                     <option value="wipe-left">左擦入</option>
                     <option value="wipe-right">右擦入</option>
+                    <option value="wipe-up">上擦入</option>
+                    <option value="wipe-down">下擦入</option>
                     <option value="slide-left">左滑入</option>
                     <option value="slide-right">右滑入</option>
+                    <option value="zoom-in">放大进入</option>
+                    <option value="blur-in">模糊进入</option>
                   </select>
                 </label>
                 <label className="field">
@@ -3028,8 +3036,12 @@ export function Workstation() {
                     <option value="dissolve">叠化</option>
                     <option value="wipe-left">左擦出</option>
                     <option value="wipe-right">右擦出</option>
+                    <option value="wipe-up">上擦出</option>
+                    <option value="wipe-down">下擦出</option>
                     <option value="slide-left">左滑出</option>
                     <option value="slide-right">右滑出</option>
+                    <option value="zoom-in">放大离开</option>
+                    <option value="blur-in">模糊离开</option>
                   </select>
                 </label>
                 <label className="field">

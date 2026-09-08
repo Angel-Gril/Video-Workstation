@@ -11,7 +11,18 @@ export type EffectKind =
 
 export type Easing = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut'
 
-export type TransitionKind = 'none' | 'fade' | 'dissolve' | 'wipe-left' | 'wipe-right' | 'slide-left' | 'slide-right'
+export type TransitionKind =
+  | 'none'
+  | 'fade'
+  | 'dissolve'
+  | 'wipe-left'
+  | 'wipe-right'
+  | 'wipe-up'
+  | 'wipe-down'
+  | 'slide-left'
+  | 'slide-right'
+  | 'zoom-in'
+  | 'blur-in'
 
 export interface Keyframe {
   time: number
