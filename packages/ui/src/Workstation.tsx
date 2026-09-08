@@ -8,6 +8,9 @@ import {
   serializeProject,
   timelineToExportPlan,
   validateProject,
+  applyClipStylePreset,
+  clipStylePreset,
+  isClipStylePreset,
   sampleKeyframeTrack,
   applyReframeTransform,
   assetReframeDefaults,
@@ -20,6 +23,7 @@ import {
   type MediaAsset,
   type Project,
   type ProjectMeta,
+  type ClipStylePreset,
   type TimelineClip,
   type Track,
   type TrackKind,
@@ -426,6 +430,9 @@ export function Workstation() {
   const [exportName, setExportName] = useState('exports/输出.mp4')
   const [batchExportProgress, setBatchExportProgress] = useState<string | null>(null)
   const [selectedEffect, setSelectedEffect] = useState<EffectKind>('opacity')
+  const [stylePresets, setStylePresets] = useState<ClipStylePreset[]>([])
+  const [stylePresetId, setStylePresetId] = useState('')
+  const [stylePresetName, setStylePresetName] = useState('')
   const [message, setMessage] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
   const projectFileRef = useRef<HTMLInputElement | null>(null)
@@ -433,6 +440,25 @@ export function Workstation() {
   useEffect(() => {
     selectedClipIdsRef.current = selectedClipIds
   }, [selectedClipIds])
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('workstation-style-presets')
+      if (!raw) return
+      const parsed: unknown = JSON.parse(raw)
+      if (Array.isArray(parsed)) setStylePresets(parsed.filter(isClipStylePreset))
+    } catch {
+      setStylePresets([])
+    }
+  }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('workstation-style-presets', JSON.stringify(stylePresets))
+    } catch {
+      // Browser storage can be unavailable in private mode; presets stay in memory.
+    }
+  }, [stylePresets])
 
   useEffect(() => {
     fetch('/api/health')
@@ -1696,6 +1722,54 @@ export function Workstation() {
         : track)
       .filter((track) => track.keyframes.length > 0)
     changeSelectedClip({ effects }, '关键帧已删除')
+  }
+
+  function saveSelectedStylePreset() {
+    if (!selectedClip) return
+    const name = stylePresetName.trim() || `样式 ${stylePresets.length + 1}`
+    const preset = clipStylePreset(selectedClip, `style-${Date.now()}`, name)
+    setStylePresets((items) => [...items, preset])
+    setStylePresetName('')
+    setStylePresetId(preset.id)
+    setMessage(`已保存样式预设：${preset.name}`)
+  }
+
+  function applySelectedStylePreset(reset: boolean) {
+    if (!selectedClip) return
+    const preset = stylePresets.find((item) => item.id === stylePresetId)
+    if (!preset) {
+      setMessage('请选择要应用的样式预设')
+      return
+    }
+    const targets = allTimelineClips.filter((item) =>
+      selectedClipIdsRef.current.has(item.id) || item.id === selectedClip.id
+    )
+    if (targets.length === 0) return
+    const nextById = new Map(targets.map((clip) => [clip.id, applyClipStylePreset(clip, preset, reset)]))
+    const commands = [...new Set(targets.map((clip) => clip.trackId))].map((trackId) => {
+      const track = project.timeline.tracks.find((item) => item.id === trackId)
+      if (!track) throw new Error('目标轨道不存在')
+      return {
+        id: uid('cmd-style-preset'),
+        kind: 'track.replaceClips' as const,
+        payload: {
+          trackId: track.id,
+          clips: track.clips.map((item) => nextById.get(item.id) ?? item)
+        }
+      }
+    })
+    const label = `已应用样式预设：${preset.name}`
+    const batch = batchCommand(project, commands, label)
+    dispatch(batch, updateMetaTime(applyCommand(project, batch)))
+    setMessage(`${label}（${targets.length} 个片段）`)
+  }
+
+  function deleteSelectedStylePreset() {
+    const preset = stylePresets.find((item) => item.id === stylePresetId)
+    if (!preset) return
+    setStylePresets((items) => items.filter((item) => item.id !== preset.id))
+    setStylePresetId('')
+    setMessage(`已删除样式预设：${preset.name}`)
   }
 
   function applySmartReframe(mode: 'auto' | 'faceFocus') {
@@ -3185,6 +3259,44 @@ export function Workstation() {
                     ))}
                   </div>
                 ) : null}
+                <div className="style-preset-panel">
+                  <strong>样式预设</strong>
+                  <label className="field">
+                    <span>保存当前样式</span>
+                    <input
+                      value={stylePresetName}
+                      placeholder="预设名称"
+                      onChange={(event) => setStylePresetName(event.target.value)}
+                    />
+                  </label>
+                  <button onClick={saveSelectedStylePreset}>保存样式</button>
+                  {stylePresets.length > 0 ? (
+                    <label className="field">
+                      <span>应用预设</span>
+                      <select
+                        value={stylePresetId}
+                        onChange={(event) => setStylePresetId(event.target.value)}
+                      >
+                        <option value="">选择预设</option>
+                        {stylePresets.map((preset) => (
+                          <option key={preset.id} value={preset.id}>{preset.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+                  {stylePresets.length > 0 ? (
+                    <div className="move-grid">
+                      <button onClick={() => applySelectedStylePreset(true)}>覆盖应用</button>
+                      <button onClick={() => applySelectedStylePreset(false)}>合并应用</button>
+                      <button onClick={deleteSelectedStylePreset}>删除预设</button>
+                    </div>
+                  ) : null}
+                  <span>
+                    {selectedClipIdsRef.current.size > 1
+                      ? `将应用到 ${selectedClipIdsRef.current.size} 个片段`
+                      : '应用到当前选中片段'}
+                  </span>
+                </div>
                 <div className="move-grid">
                   <button onClick={() => moveSelectedClip('left')}>左移</button>
                   <button onClick={() => moveSelectedClip('up')}>上移</button>
