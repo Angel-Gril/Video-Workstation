@@ -716,6 +716,32 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
     def background_ducking_expression() -> str:
         return ducking_expression() if ducking_enabled else "1"
 
+    def audio_processing_chain(clip: dict[str, Any]) -> str:
+        settings = clip.get("audioProcessing", {})
+        if not isinstance(settings, dict):
+            return ""
+        parts: list[str] = []
+        try:
+            denoise = clamp(float(settings.get("denoise", 0)), 0, 1)
+        except (TypeError, ValueError):
+            denoise = 0
+        try:
+            deess = clamp(float(settings.get("deess", 0)), 0, 1)
+        except (TypeError, ValueError):
+            deess = 0
+        normalize = bool(settings.get("normalizeLoudness", False))
+        if denoise > 0:
+            noise = 0.01 + denoise * 0.07
+            parts.append(f"afftdn=nr={noise:.3f}:nf=-25")
+        if normalize:
+            parts.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+        if deess > 0:
+            parts.append(
+                "highpass=f=6000,deesser=i=0.15:m=0.5:f=0.5,"
+                f"lowpass=f={6000 + int(deess * 6000)}"
+            )
+        return ",".join(parts)
+
     audio_mixin_inputs = audio_stream_inputs + independent_audio_inputs + music_audio_inputs
 
     if video_clips:
@@ -868,8 +894,14 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
             volume = clamp(float(clip.get("volume", 1)), 0, 2)
             delay_ms = max(0, int(round(float(clip.get("timelineStart", 0)) * 1000)))
             clip_duration = max(0.0, float(clip.get("duration", 0)))
+            source_chain = audio_processing_chain(clip)
+            source_label = f"premix{index}"
+            source_selector = f"[{index}:a]"
+            if source_chain:
+                filters.append(f"{source_selector}{source_chain}[{source_label}]")
+                source_selector = f"[{source_label}]"
             filters.append(
-                f"[{index}:a]volume={volume},aresample=48000,"
+                f"{source_selector}volume={volume},aresample=48000,"
                 "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
                 f"adelay={delay_ms}:all=1[mix{index}]"
             )

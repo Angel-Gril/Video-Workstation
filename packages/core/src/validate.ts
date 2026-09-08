@@ -74,6 +74,14 @@ function validateClip(
   if (clip.timelineStart < 0) {
     issues.push({ path: `${path}.timelineStart`, message: 'Timeline start cannot be negative' })
   }
+  if (clip.audioProcessing) {
+    for (const key of ['denoise', 'deess'] as const) {
+      const value = clip.audioProcessing[key]
+      if (value !== undefined && (!Number.isFinite(value) || value < 0 || value > 1)) {
+        issues.push({ path: `${path}.audioProcessing.${key}`, message: 'Audio processing amount must be between 0 and 1' })
+      }
+    }
+  }
   for (const [effectIndex, effect] of clip.effects.entries()) {
     for (const [keyIndex, keyframe] of effect.keyframes.entries()) {
       if (keyframe.time < 0 || keyframe.time > clip.duration + 1e-6) {

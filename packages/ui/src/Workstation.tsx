@@ -1383,6 +1383,20 @@ export function Workstation() {
     }, '已更新透明度')
   }
 
+  function updateSelectedAudioProcessing(patch: NonNullable<TimelineClip['audioProcessing']>) {
+    if (!selectedClip) return
+    const current = selectedClip.audioProcessing ?? {}
+    const next = {
+      ...current,
+      ...patch
+    }
+    if (!next.denoise && !next.deess && !next.normalizeLoudness) {
+      changeSelectedClip({ audioProcessing: undefined }, '音频处理已关闭')
+      return
+    }
+    changeSelectedClip({ audioProcessing: next }, '音频处理已更新')
+  }
+
   function updateEffectValue(value: number) {
     if (!selectedClip) return
     const range = effectRanges[selectedEffect]
@@ -2598,6 +2612,41 @@ export function Workstation() {
                   />
                   <strong>{selectedClip.volume.toFixed(2)}</strong>
                 </label>
+                <div className="audio-process-panel">
+                  <strong>音频处理</strong>
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedClip.audioProcessing?.normalizeLoudness)}
+                      onChange={(event) => updateSelectedAudioProcessing({ normalizeLoudness: event.target.checked })}
+                    />
+                    <span>响度归一化</span>
+                  </label>
+                  <label className="range">
+                    <span>降噪</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={.01}
+                      value={selectedClip.audioProcessing?.denoise ?? 0}
+                      onChange={(event) => updateSelectedAudioProcessing({ denoise: Number(event.target.value) })}
+                    />
+                    <strong>{(selectedClip.audioProcessing?.denoise ?? 0).toFixed(2)}</strong>
+                  </label>
+                  <label className="range">
+                    <span>去齿音</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={.01}
+                      value={selectedClip.audioProcessing?.deess ?? 0}
+                      onChange={(event) => updateSelectedAudioProcessing({ deess: Number(event.target.value) })}
+                    />
+                    <strong>{(selectedClip.audioProcessing?.deess ?? 0).toFixed(2)}</strong>
+                  </label>
+                </div>
                 <label className="field">
                   <span>效果</span>
                   <select

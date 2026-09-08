@@ -607,6 +607,30 @@ h2 { font-size: 12px; color: #c9c9d1; font-weight: 600; }
 }
 
 .range span { color: var(--muted); }
+.audio-process-panel {
+  border: 1px solid #33343c;
+  border-radius: 5px;
+  background: var(--panel-strong);
+  padding: 9px;
+  display: grid;
+  gap: 8px;
+}
+.audio-process-panel strong { font-size: 11px; color: var(--muted); }
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.check-row input {
+  width: 14px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0;
+  accent-color: var(--accent);
+}
+.audio-process-panel .range { margin-bottom: 0; }
 .move-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
 .keyframe-list { display: grid; gap: 8px; max-height: 150px; overflow: auto; }
 .keyframe-group {

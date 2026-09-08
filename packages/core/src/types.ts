@@ -63,6 +63,11 @@ export interface TimelineClip {
   transitionIn?: TransitionKind | undefined
   transitionOut?: TransitionKind | undefined
   transitionDuration?: number | undefined
+  audioProcessing?: {
+    denoise?: number | undefined
+    normalizeLoudness?: boolean | undefined
+    deess?: number | undefined
+  } | undefined
   narration?: string | undefined
   narrationPath?: string | undefined
   narrationPending?: boolean | undefined
