@@ -117,6 +117,15 @@ function transitionLabel(kind: 'cut' | 'none' | TransitionKind): string {
   return kind === 'cut' || kind === 'none' || kind === undefined ? '硬切' : transitionLabels[kind]
 }
 
+function videoCapabilityText(asset: MediaAsset): string {
+  if (asset.kind !== 'video') return ''
+  return asset.width && asset.height
+    ? asset.width >= asset.height
+      ? ' · 横屏适配'
+      : ' · 竖屏适配'
+    : ''
+}
+
 interface ClipDragState {
   clipId: string
   trackId: string
@@ -2368,7 +2377,7 @@ export function Workstation() {
             {exporting ? (exportProgress === null ? '导出中' : `${Math.round(exportProgress * 100)}%`) : '导出'}
           </button>
           <span className={serviceOnline ? 'service online' : 'service offline'}>
-            {serviceOnline === null ? '检测服务' : serviceOnline ? '在线' : '离线'}
+            {serviceOnline === null ? '检测服务' : serviceOnline ? '服务在线' : '服务离线'}
           </span>
         </div>
       </header>
@@ -2444,6 +2453,7 @@ export function Workstation() {
                       <strong>{asset.name}</strong>
                       <span>{asset.kind} · {formatTime(asset.duration)}{asset.width ? ` · ${asset.width}×${asset.height}` : ''}</span>
                       <span>{speechCount ? `${speechCount} 段语音` : '未转录'}{asset.kind === 'video' && sceneCount ? ` · ${sceneCount} 个场景` : ''}</span>
+                      {videoCapabilityText(asset) ? <span className="asset-capability">{videoCapabilityText(asset)}</span> : null}
                     </div>
                     <div className="asset-actions">
                       <button onClick={(event) => { event.stopPropagation(); addAssetToTimeline(asset) }}>时间线</button>

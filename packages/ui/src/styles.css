@@ -184,6 +184,7 @@ h2 { font-size: 12px; color: #c9c9d1; font-weight: 600; }
 .asset-meta { min-width: 0; display: grid; gap: 3px; }
 .asset-meta strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .asset-meta span { color: var(--muted); font-size: 11px; }
+.asset-capability { color: var(--accent); font-size: 11px; }
 
 .asset-actions, .plan-actions, .plan-bulk {
   display: grid;
