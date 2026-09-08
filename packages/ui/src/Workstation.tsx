@@ -1349,6 +1349,121 @@ export function Workstation() {
     }
   }
 
+  function removeSelectedClipsRipple() {
+    const clips = allTimelineClips.filter((clip) => selectedClipIds.has(clip.id))
+    if (clips.length === 0) return
+    try {
+      const removals: Command[] = clips.map((clip) => ({
+        id: uid('cmd-ripple-remove'),
+        kind: 'clip.remove' as const,
+        payload: { clipId: clip.id }
+      }))
+      let next = removals.reduce(applyCommand, project)
+      const removedSpan = Math.max(...clips.map((clip) => clip.timelineStart + clip.duration)) -
+        Math.min(...clips.map((clip) => clip.timelineStart))
+      const rippleCommands: Command[] = []
+      for (const track of project.timeline.tracks) {
+        if (track.locked) continue
+        const removedStarts = clips.filter((clip) => clip.trackId === track.id).map((clip) => clip.timelineStart)
+        if (removedStarts.length === 0) continue
+        const boundary = Math.min(...removedStarts)
+        const shifted = track.clips
+          .filter((clip) => !selectedClipIds.has(clip.id) && clip.timelineStart >= boundary)
+          .map((clip) => ({ ...clip, timelineStart: Math.max(0, clip.timelineStart - removedSpan) }))
+        if (shifted.length === 0) continue
+        rippleCommands.push({
+          id: uid('cmd-ripple-shift'),
+          kind: 'track.replaceClips',
+          payload: {
+            trackId: track.id,
+            clips: track.clips
+              .filter((clip) => !selectedClipIds.has(clip.id) && clip.timelineStart < boundary)
+              .concat(shifted)
+              .sort((a, b) => a.timelineStart - b.timelineStart)
+          }
+        })
+        next = rippleCommands.reduce(applyCommand, next)
+      }
+      const batch = batchCommand(project, [...removals, ...rippleCommands], `波纹删除 ${clips.length} 个片段`)
+      dispatch(batch, updateMetaTime(next))
+      setSelectedClipId(null)
+      setSelectedClipIds(new Set())
+      setMessage(`已波纹删除 ${clips.length} 个片段`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '波纹删除失败')
+    }
+  }
+
+  function nudgeSelectedClips(direction: 'left' | 'right') {
+    const clips = allTimelineClips.filter((clip) =>
+      selectedClipIds.has(clip.id) &&
+      !project.timeline.tracks.find((track) => track.id === clip.trackId)?.locked
+    )
+    if (clips.length === 0) return
+    const delta = direction === 'left' ? -0.25 : 0.25
+    const nextById = new Map(clips.map((clip) => [clip.id, {
+      timelineStart: Math.max(0, clip.timelineStart + delta)
+    }]))
+    const commands: Command[] = [...new Set(clips.map((clip) => clip.trackId))].map((trackId) => {
+      const track = project.timeline.tracks.find((item) => item.id === trackId)
+      if (!track) throw new Error('目标轨道不存在')
+      return {
+        id: uid('cmd-nudge'),
+        kind: 'track.replaceClips' as const,
+        payload: {
+          trackId,
+          clips: track.clips.map((clip) => ({ ...clip, ...nextById.get(clip.id) }))
+        }
+      }
+    })
+    const batch = batchCommand(project, commands, `整体${direction === 'left' ? '左移' : '右移'} ${clips.length} 个片段`)
+    try {
+      dispatch(batch, updateMetaTime(commands.reduce(applyCommand, project)))
+      setMessage(`已整体${direction === 'left' ? '左移' : '右移'} ${clips.length} 个片段`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '批量移动失败')
+    }
+  }
+
+  function closeTrackGaps() {
+    const commands: Command[] = []
+    let gapCount = 0
+    for (const track of project.timeline.tracks) {
+      if (track.locked || track.clips.length < 2) continue
+      const ordered = [...track.clips].sort((a, b) => a.timelineStart - b.timelineStart)
+      let cursor = ordered[0]!.timelineStart
+      const nextClips = ordered.map((clip) => {
+        const start = clip.timelineStart
+        if (start > cursor + 0.001) {
+          gapCount += 1
+          cursor = start
+        }
+        const next = { ...clip, timelineStart: Math.max(0, clip.timelineStart - (start - cursor)) }
+        cursor = next.timelineStart + next.duration
+        return next
+      })
+      const changed = nextClips.some((clip, index) => Math.abs(clip.timelineStart - ordered[index]!.timelineStart) > 0.001)
+      if (changed) {
+        commands.push({
+          id: uid('cmd-close-gaps'),
+          kind: 'track.replaceClips',
+          payload: { trackId: track.id, clips: nextClips }
+        })
+      }
+    }
+    if (commands.length === 0) {
+      setMessage('没有需要合并的间隙')
+      return
+    }
+    const batch = batchCommand(project, commands, `合并 ${gapCount} 个轨道间隙`)
+    try {
+      dispatch(batch, updateMetaTime(applyCommand(project, batch)))
+      setMessage(`已合并 ${gapCount} 个轨道间隙`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '合并间隙失败')
+    }
+  }
+
   function startMultiDrag(event: React.PointerEvent, clip: TimelineClip): boolean {
     const draggable = allTimelineClips.filter((item) =>
       selectedClipIdsRef.current.has(item.id) &&
@@ -2475,12 +2590,37 @@ export function Workstation() {
               <div>
                 <button onClick={() => selectedClipIds.size > 1 ? splitSelectedClips() : splitSelectedClip()} disabled={!selectedClip}>拆分</button>
                 <button
+                  onClick={() => nudgeSelectedClips('left')}
+                  disabled={selectedClipIds.size === 0}
+                  title="多选片段整体左移"
+                >
+                  ◀
+                </button>
+                <button
+                  onClick={() => nudgeSelectedClips('right')}
+                  disabled={selectedClipIds.size === 0}
+                  title="多选片段整体右移"
+                >
+                  ▶
+                </button>
+                <button
                   className="danger"
                   onClick={() => selectedClipIds.size > 1 ? removeSelectedClips() : removeSelectedClip()}
                   disabled={!selectedClip}
                 >
                   删除
                 </button>
+                <button
+                  className="danger"
+                  onClick={removeSelectedClipsRipple}
+                  disabled={selectedClipIds.size === 0}
+                  title="删除选中片段并向前合并空隙"
+                >
+                  波纹
+                </button>
+                <button onClick={closeTrackGaps} title="合并所有未锁定轨道的片段间隙">去间隙</button>
+                <button onClick={() => { setSelectedClipId(allTimelineClips[0]?.id ?? null); setSelectedClipIds(new Set(allTimelineClips.map((clip) => clip.id))) }}>全选</button>
+                <button onClick={() => { setSelectedClipId(null); setSelectedClipIds(new Set()) }} disabled={selectedClipIds.size === 0}>清空</button>
                 <button
                   className={snapping ? 'active' : ''}
                   onClick={() => setSnapping((value) => !value)}
