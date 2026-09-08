@@ -210,6 +210,7 @@ function makeInitialProject(): Project {
       rate: '+0%',
       audioDucking: { enabled: true, gain: .3, attack: .16, release: .45 }
     },
+    audioBus: { gain: 1, limiterEnabled: true, limiterCeiling: -1 },
     media: [],
     timeline: {
       duration: 0,
@@ -250,6 +251,10 @@ function normalizeTransforms(project: Project): Project {
         ...makeInitialProject().narrationSettings?.audioDucking,
         ...project.narrationSettings?.audioDucking
       }
+    },
+    audioBus: {
+      ...makeInitialProject().audioBus,
+      ...project.audioBus
     },
     timeline: {
       ...project.timeline,
@@ -311,6 +316,10 @@ const batchOutputPresets: BatchOutputPreset[] = [
   { id: 'square', label: '方形 1080×1080', width: 1080, height: 1080, frameRate: 30, quality: 'balanced', suffix: 'square' },
   { id: 'review', label: '审阅 854×480', width: 854, height: 480, frameRate: 24, quality: 'fast', suffix: 'review' }
 ]
+
+function gainLabel(value: number): string {
+  return `${(20 * Math.log10(Math.max(0.001, value))).toFixed(1)} dB`
+}
 
 function topVisualLabels(signals: VisualSignal[]): string[] {
   const counts = new Map<string, number>()
@@ -1754,6 +1763,25 @@ export function Workstation() {
     const batch = batchCommand(project, commands, label)
     dispatch(batch, updateMetaTime(applyCommand(project, batch)))
     setMessage(label)
+  }
+
+  function updateAudioBus(patch: NonNullable<Project['audioBus']>) {
+    const next = updateMetaTime({
+      ...project,
+      audioBus: {
+        gain: 1,
+        limiterEnabled: true,
+        limiterCeiling: -1,
+        ...project.audioBus,
+        ...patch
+      }
+    })
+    dispatch({
+      id: uid('cmd-audio-bus'),
+      kind: 'project.set',
+      payload: { project: next }
+    }, next)
+    setMessage('音频总线已更新')
   }
 
   function updateEffectValue(value: number) {
@@ -3361,6 +3389,74 @@ export function Workstation() {
                     />
                     <strong>{(selectedClip.audioProcessing?.deess ?? 0).toFixed(2)}</strong>
                   </label>
+                  <div className="audio-eq-grid">
+                    {([
+                      ['lowGain', '低频'],
+                      ['midGain', '中频'],
+                      ['highGain', '高频']
+                    ] as const).map(([key, label]) => (
+                      <label className="range" key={key}>
+                        <span>{label}</span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={2}
+                          step={.01}
+                          value={selectedClip.audioProcessing?.[key] ?? 1}
+                          onChange={(event) => updateSelectedAudioProcessing({ [key]: Number(event.target.value) })}
+                        />
+                        <strong>{gainLabel(selectedClip.audioProcessing?.[key] ?? 1)}</strong>
+                      </label>
+                    ))}
+                  </div>
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedClip.audioProcessing?.compressorEnabled)}
+                      onChange={(event) => updateSelectedAudioProcessing({ compressorEnabled: event.target.checked })}
+                    />
+                    <span>压缩器</span>
+                  </label>
+                  {selectedClip.audioProcessing?.compressorEnabled ? (
+                    <>
+                      <label className="range">
+                        <span>阈值</span>
+                        <input
+                          type="range"
+                          min={-60}
+                          max={0}
+                          step={1}
+                          value={selectedClip.audioProcessing?.compressorThreshold ?? -18}
+                          onChange={(event) => updateSelectedAudioProcessing({ compressorThreshold: Number(event.target.value) })}
+                        />
+                        <strong>{selectedClip.audioProcessing?.compressorThreshold ?? -18} dB</strong>
+                      </label>
+                      <label className="range">
+                        <span>比率</span>
+                        <input
+                          type="range"
+                          min={1}
+                          max={20}
+                          step={.5}
+                          value={selectedClip.audioProcessing?.compressorRatio ?? 3}
+                          onChange={(event) => updateSelectedAudioProcessing({ compressorRatio: Number(event.target.value) })}
+                        />
+                        <strong>{(selectedClip.audioProcessing?.compressorRatio ?? 3).toFixed(1)}:1</strong>
+                      </label>
+                      <label className="range">
+                        <span>补偿</span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={2}
+                          step={.01}
+                          value={selectedClip.audioProcessing?.compressorMakeup ?? 1}
+                          onChange={(event) => updateSelectedAudioProcessing({ compressorMakeup: Number(event.target.value) })}
+                        />
+                        <strong>{gainLabel(selectedClip.audioProcessing?.compressorMakeup ?? 1)}</strong>
+                      </label>
+                    </>
+                  ) : null}
                 </div>
                 <label className="field">
                   <span>效果</span>
@@ -3513,6 +3609,43 @@ export function Workstation() {
             <p className="export-note">
               解说混音：自动避让{narrationDucking ? '开启' : '关闭'}；解说在时间线中的音量单独生效。
             </p>
+            <div className="audio-bus-panel">
+              <strong>混音总线</strong>
+              <label className="range">
+                <span>总线增益</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={2}
+                  step={.01}
+                  value={project.audioBus?.gain ?? 1}
+                  onChange={(event) => updateAudioBus({ gain: Number(event.target.value) })}
+                />
+                <strong>{gainLabel(project.audioBus?.gain ?? 1)}</strong>
+              </label>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={project.audioBus?.limiterEnabled ?? false}
+                  onChange={(event) => updateAudioBus({ limiterEnabled: event.target.checked })}
+                />
+                <span>限制器</span>
+              </label>
+              {project.audioBus?.limiterEnabled ? (
+                <label className="range">
+                  <span>峰值上限</span>
+                  <input
+                    type="range"
+                    min={-12}
+                    max={0}
+                    step={.5}
+                    value={project.audioBus?.limiterCeiling ?? -1}
+                    onChange={(event) => updateAudioBus({ limiterCeiling: Number(event.target.value) })}
+                  />
+                  <strong>{(project.audioBus?.limiterCeiling ?? -1).toFixed(1)} dB</strong>
+                </label>
+              ) : null}
+            </div>
             <div className="export-grid">
               <button onClick={() => void exportProject('mp4')} disabled={exporting || serviceOnline === false}>MP4</button>
               <button onClick={() => void exportBatch()} disabled={exporting || serviceOnline === false}>

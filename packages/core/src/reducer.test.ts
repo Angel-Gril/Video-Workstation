@@ -216,4 +216,25 @@ describe('timeline reducer', () => {
     })
     expect(added.effects).toEqual([])
   })
+
+  it('normalizes project audio bus settings', () => {
+    const next = applyCommand(project, {
+      id: 'audio-bus',
+      kind: 'project.set',
+      payload: {
+        project: {
+          ...project,
+          audioBus: { gain: 8, limiterEnabled: true, limiterCeiling: -20 }
+        }
+      }
+    })
+
+    expect(next.audioBus).toEqual({ gain: 2, limiterEnabled: true, limiterCeiling: -12 })
+    const legacy = applyCommand(project, {
+      id: 'legacy-project',
+      kind: 'project.set',
+      payload: { project }
+    })
+    expect(legacy.audioBus).toEqual({ gain: 1, limiterEnabled: false, limiterCeiling: -1 })
+  })
 })

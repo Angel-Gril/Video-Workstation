@@ -78,6 +78,7 @@ describe('export plan', () => {
     expect(plan.video[0]?.audioProcessing).toEqual({ denoise: .35, normalizeLoudness: true, loudnessTarget: -14, deess: .5 })
     expect(plan.caption[0]).toMatchObject({ text: '示例字幕' })
     expect(plan.music).toEqual([])
+    expect(plan.audioBus).toBeUndefined()
   })
 
   it('carries source dimensions and reframe data to the renderer', () => {

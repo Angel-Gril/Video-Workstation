@@ -93,6 +93,15 @@ export interface TimelineClip {
     normalizeLoudness?: boolean | undefined
     loudnessTarget?: number | undefined
     deess?: number | undefined
+    lowGain?: number | undefined
+    midGain?: number | undefined
+    highGain?: number | undefined
+    compressorEnabled?: boolean | undefined
+    compressorThreshold?: number | undefined
+    compressorRatio?: number | undefined
+    compressorAttack?: number | undefined
+    compressorRelease?: number | undefined
+    compressorMakeup?: number | undefined
   } | undefined
   narration?: string | undefined
   narrationPath?: string | undefined
@@ -139,9 +148,16 @@ export interface NarrationSettings {
   } | undefined
 }
 
+export interface AudioBusSettings {
+  gain?: number | undefined
+  limiterEnabled?: boolean | undefined
+  limiterCeiling?: number | undefined
+}
+
 export interface Project {
   meta: ProjectMeta
   narrationSettings?: NarrationSettings | undefined
+  audioBus?: AudioBusSettings | undefined
   media: MediaAsset[]
   timeline: Timeline
 }

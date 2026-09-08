@@ -1,4 +1,5 @@
 import type {
+  AudioBusSettings,
   Command,
   CommandHistoryEntry,
   KeyframeTrack,
@@ -39,6 +40,12 @@ function withTimeline(project: Project, timeline: Timeline): Project {
 function sanitizedClip(value: TimelineClip): TimelineClip {
   return {
     ...value,
+    audioProcessing: value.audioProcessing
+      ? {
+          denoise: 0,
+          ...value.audioProcessing
+        }
+      : undefined,
     transform: isTransform(value.transform) ? value.transform : {
       scale: 1,
       x: 0,
@@ -55,6 +62,17 @@ function sanitizedClip(value: TimelineClip): TimelineClip {
 
 function normalizeNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function normalizeAudioBus(value: unknown): AudioBusSettings {
+  const source = typeof value === 'object' && value !== null ? value as Record<string, unknown> : {}
+  const gain = normalizeNumber(source.gain, 1)
+  const ceiling = normalizeNumber(source.limiterCeiling, -1)
+  return {
+    gain: Math.min(2, Math.max(0, gain)),
+    limiterEnabled: Boolean(source.limiterEnabled),
+    limiterCeiling: Math.min(0, Math.max(-12, ceiling))
+  }
 }
 
 function isCommand(value: unknown): value is Command {
@@ -199,7 +217,10 @@ function apply(project: Project, command: Command): Project {
     case 'project.set': {
       const value = command.payload.project
       if (!isProject(value)) throw new CommandError('Invalid project payload')
-      return value
+      return {
+        ...value,
+        audioBus: normalizeAudioBus(value.audioBus)
+      }
     }
     case 'command.batch': {
       const commands = command.payload.commands

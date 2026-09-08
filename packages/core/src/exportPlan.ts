@@ -40,6 +40,7 @@ export interface ExportPlan {
   }
   narrationVoice?: string | undefined
   narrationRate?: string | undefined
+  audioBus?: Project['audioBus'] | undefined
   audioDucking?: {
     enabled?: boolean | undefined
     gain?: number | undefined
@@ -109,6 +110,7 @@ export function createTimelinePlan(project: Project): ExportPlan {
 
   return {
     meta: project.meta,
+    audioBus: project.audioBus,
     narrationVoice: project.narrationSettings?.voice,
     narrationRate: project.narrationSettings?.rate,
     audioDucking: project.narrationSettings?.audioDucking,
@@ -129,6 +131,7 @@ export function timelineToExportPlan(project: Project): ExportPlan {
 
   return {
     ...plan,
+    audioBus: project.audioBus,
     video: plan.video.filter((clip) => !hiddenTrackIds.has(clip.trackId ?? '')),
     audio: plan.audio.filter((clip) => !hiddenTrackIds.has(clip.trackId ?? '')),
     music: plan.music.filter((clip) => !hiddenTrackIds.has(clip.trackId ?? ''))

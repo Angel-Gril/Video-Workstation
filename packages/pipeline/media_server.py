@@ -878,6 +878,26 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
     def background_ducking_expression() -> str:
         return ducking_expression() if ducking_enabled else "1"
 
+    def audio_bus_chain() -> str:
+        bus = plan.get("audioBus", {}) if isinstance(plan.get("audioBus", {}), dict) else {}
+        try:
+            gain = clamp(float(bus.get("gain", 1)), 0, 2)
+        except (TypeError, ValueError):
+            gain = 1
+        try:
+            limiter_enabled = bool(bus.get("limiterEnabled", False))
+            ceiling = clamp(float(bus.get("limiterCeiling", -1)), -12, 0)
+        except (TypeError, ValueError):
+            limiter_enabled = False
+            ceiling = -1
+        parts: list[str] = []
+        if abs(gain - 1) > 0.001:
+            parts.append(f"volume={gain:.6f}")
+        if limiter_enabled:
+            limit_amplitude = 10 ** (ceiling / 20)
+            parts.append(f"alimiter=level_in=1:level_out=1:limit={limit_amplitude:.6f}:level=false")
+        return ",".join(parts)
+
     def reframe_focus_expression(clip: dict[str, Any], axis: str) -> str | None:
         reframe = clip.get("transform", {}).get("reframe", {})
         if not isinstance(reframe, dict):
@@ -923,8 +943,22 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
     def audio_processing_chain(clip: dict[str, Any]) -> str:
         settings = clip.get("audioProcessing", {})
         if not isinstance(settings, dict):
-            return ""
+            settings = {}
         parts: list[str] = []
+        for key, frequency, width in (
+            ("lowGain", 180, 1.1),
+            ("midGain", 1600, 1.4),
+            ("highGain", 6500, 1.6),
+        ):
+            try:
+                gain = clamp(float(settings.get(key, 1)), 0, 2)
+            except (TypeError, ValueError):
+                gain = 1
+            if abs(gain - 1) > 0.001:
+                parts.append(
+                    f"equalizer=f={frequency}:width_type=o:w={width}:"
+                    f"g={(20 * math.log10(gain)):.3f}"
+                )
         try:
             denoise = clamp(float(settings.get("denoise", 0)), 0, 1)
         except (TypeError, ValueError):
@@ -949,6 +983,19 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
                 "highpass=f=6000,deesser=i=0.15:m=0.5:f=0.5,"
                 f"lowpass=f={6000 + int(deess * 6000)}"
             )
+        try:
+            if bool(settings.get("compressorEnabled", False)):
+                threshold = clamp(float(settings.get("compressorThreshold", -18)), -60, 0)
+                ratio = clamp(float(settings.get("compressorRatio", 3)), 1, 20)
+                attack = clamp(float(settings.get("compressorAttack", 0.02)), 0.01, 3)
+                release = clamp(float(settings.get("compressorRelease", 0.25)), 0.01, 3)
+                makeup = clamp(float(settings.get("compressorMakeup", 1)), 0, 2)
+                parts.append(
+                    f"acompressor=threshold={threshold:.3f}dB:ratio={ratio:.3f}:"
+                    f"attack={attack:.3f}:release={release:.3f}:makeup={makeup:.6f}"
+                )
+        except (TypeError, ValueError):
+            pass
         return ",".join(parts)
 
     def media_stream_selector(clip: dict[str, Any], kind: str) -> str:
@@ -958,7 +1005,7 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
                 return str(int(explicit))
             except (TypeError, ValueError):
                 pass
-        return f"0:{'v' if kind == 'video' else 'a'}"
+        return 'v' if kind == 'video' else 'a'
 
     audio_mixin_inputs = audio_stream_inputs + independent_audio_inputs + music_audio_inputs
 
@@ -1268,10 +1315,14 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
             filters.append(f"[mix{index}]volume='{escape_filter_commas(gain_expr)}':eval=frame[amix{index}]")
             audio_mixin_labels[index] = f"[amix{index}]"
         mix_labels = "".join(audio_mixin_labels[index] for index in audio_mixin_inputs)
+        bus_chain = audio_bus_chain()
         if len(audio_mixin_inputs) == 1:
-            filters.append(f"{mix_labels}anull[a]")
+            filters.append(f"{mix_labels}anull[master];[master]{bus_chain or 'anull'}[a]")
         else:
-            filters.append(f"{mix_labels}amix=inputs={len(audio_mixin_inputs)}:normalize=0:dropout_transition=0[a]")
+            filters.append(
+                f"{mix_labels}amix=inputs={len(audio_mixin_inputs)}:normalize=0:"
+                f"dropout_transition=0[master];[master]{bus_chain or 'anull'}[a]"
+            )
         map_args.extend(["-map", "[a]"])
     args.extend([
         "-filter_complex", ";".join(filters),

@@ -17,6 +17,15 @@ export function validateProject(project: Project): ValidationIssue[] {
     issues.push({ path: 'meta', message: 'Project meta is incomplete' })
   }
   const mediaIds = new Set<string>()
+  if (project.audioBus) {
+    const { gain, limiterCeiling } = project.audioBus
+    if (gain !== undefined && (!Number.isFinite(gain) || gain < 0 || gain > 2)) {
+      issues.push({ path: 'audioBus.gain', message: 'Audio bus gain must be between 0 and 2' })
+    }
+    if (limiterCeiling !== undefined && (!Number.isFinite(limiterCeiling) || limiterCeiling < -12 || limiterCeiling > 0)) {
+      issues.push({ path: 'audioBus.limiterCeiling', message: 'Limiter ceiling must be between -12 and 0 dB' })
+    }
+  }
   for (const [index, asset] of project.media.entries()) {
     const path = `media.${index}`
     if (!asset.id) issues.push({ path: `${path}.id`, message: 'Media id is required' })
@@ -110,6 +119,42 @@ function validateClip(
       const value = clip.audioProcessing[key]
       if (value !== undefined && (!Number.isFinite(value) || value < 0 || value > 1)) {
         issues.push({ path: `${path}.audioProcessing.${key}`, message: 'Audio processing amount must be between 0 and 1' })
+      }
+    }
+    for (const key of ['lowGain', 'midGain', 'highGain', 'compressorMakeup'] as const) {
+      const value = clip.audioProcessing[key]
+      if (value !== undefined && (!Number.isFinite(value) || value < 0 || value > 2)) {
+        issues.push({
+          path: `${path}.audioProcessing.${key}`,
+          message: 'Audio gain must be between 0 and 2'
+        })
+      }
+    }
+    if (clip.audioProcessing.compressorThreshold !== undefined) {
+      const threshold = clip.audioProcessing.compressorThreshold
+      if (!Number.isFinite(threshold) || threshold < -60 || threshold > 0) {
+        issues.push({
+          path: `${path}.audioProcessing.compressorThreshold`,
+          message: 'Compressor threshold must be between -60 and 0 dB'
+        })
+      }
+    }
+    if (clip.audioProcessing.compressorRatio !== undefined) {
+      const ratio = clip.audioProcessing.compressorRatio
+      if (!Number.isFinite(ratio) || ratio < 1 || ratio > 20) {
+        issues.push({
+          path: `${path}.audioProcessing.compressorRatio`,
+          message: 'Compressor ratio must be between 1 and 20'
+        })
+      }
+    }
+    for (const key of ['compressorAttack', 'compressorRelease'] as const) {
+      const value = clip.audioProcessing[key]
+      if (value !== undefined && (!Number.isFinite(value) || value <= 0 || value > 3)) {
+        issues.push({
+          path: `${path}.audioProcessing.${key}`,
+          message: 'Compressor timing must be between 0.01 and 3 seconds'
+        })
       }
     }
     const loudnessTarget = clip.audioProcessing.loudnessTarget
