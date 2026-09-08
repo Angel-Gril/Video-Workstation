@@ -16,6 +16,8 @@ import traceback
 import uuid
 import tempfile
 import base64
+import cv2
+import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -370,34 +372,57 @@ def visual_signals(path: Path, samples: int = 16) -> list[dict[str, Any]]:
             raise PipelineError(result.stderr.strip()[-2000:] or "Visual sampling failed")
         frames = sorted(folder_path.glob("probe-*.png"))
         signals: list[dict[str, Any]] = []
-        previous: tuple[int, int, int] | None = None
+        previous_gray: np.ndarray | None = None
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         for index, file in enumerate(frames):
-            with Image.open(file).convert("RGB") as image:
-                pixels = list(image.getdata())
-                count = len(pixels)
-                brightness = sum(sum(pixel) / 3 for pixel in pixels) / count / 255
-                saturation = sum(
-                    (max(pixel) - min(pixel)) / max(1, max(pixel)) for pixel in pixels
-                ) / count
-                centers = [(0, 0), (0, 1), (1, 0), (1, 1)]
-                region_pixels: list[tuple[int, int, int]] = []
-                for row, col in centers:
-                    y = int(image.height * (row * 0.5 + 0.25))
-                    x = int(image.width * (col * 0.5 + 0.25))
-                    region_pixels.append(image.getpixel((x, y)))
-                center = tuple(sum(channel[i] for channel in region_pixels) // len(region_pixels) for i in range(3))
-                motion = 0.0
-                if previous:
-                    motion = sum(abs(previous[i] - center[i]) for i in range(3)) / 255 / 3
-                previous = center
+            image = cv2.imread(str(file))
+            if image is None:
+                continue
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+            brightness = float(gray.mean()) / 255
+            saturation = float(hsv[:, :, 1].mean()) / 255
+            edges = cv2.Canny(gray, 80, 180)
+            edge_density = float(np.count_nonzero(edges)) / max(1, edges.size)
+            motion = 0.0
+            if previous_gray is not None and previous_gray.shape == gray.shape:
+                motion = float(np.mean(np.abs(previous_gray.astype(np.int16) - gray.astype(np.int16)))) / 255
+            previous_gray = gray
+            objects: list[dict[str, Any]] = []
+            labels: list[str] = []
+            faces = face_cascade.detectMultiScale(
+                gray,
+                scaleFactor=1.12,
+                minNeighbors=4,
+                minSize=(int(gray.shape[0] * .08), int(gray.shape[0] * .08)),
+            )
+            for (x, y, width, height) in faces[:5]:
+                objects.append({"name": "人脸", "score": 0.9})
+            if len(objects):
+                labels.append("人物")
+            if motion >= .08:
+                labels.append("运动")
+            elif motion < .015:
+                labels.append("静态")
+            if edge_density >= .16:
+                labels.append("画面细节")
+            if saturation >= .32:
+                labels.append("高饱和")
+            elif saturation <= .08:
+                labels.append("低饱和")
+            if brightness >= .62:
+                labels.append("明亮")
+            elif brightness <= .22:
+                labels.append("暗场")
             signals.append({
                 "mediaId": asset["id"],
                 "start": duration * index / samples,
                 "end": duration * (index + 1) / samples,
                 "brightness": round(brightness, 5),
                 "saturation": round(saturation, 5),
-                "motion": round(min(1.0, motion * 2), 5),
-                "objects": []
+                "motion": round(min(1.0, motion * 2.2), 5),
+                "objects": objects,
+                "labels": labels,
             })
     return signals
 
@@ -968,8 +993,10 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
         if not detail and result.stderr:
             detail = result.stderr.read()
         raise PipelineError(detail[-2000:] or "Export failed")
+    exported = probe(output)
     return {
         "output": str(output.resolve().as_posix()),
+        "probe": exported,
         "videoClips": len(video_clips),
         "audioClips": len(audio_clips),
         "musicClips": len(music_clips),

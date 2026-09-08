@@ -99,7 +99,12 @@ describe('narrative planner', () => {
     expect(factor?.value).toBeCloseTo(0.81)
     expect(factor?.detail).toContain('0.81')
     expect(factor?.detail).toContain('0.72')
-    expect(plan.segments[0]?.visual).toEqual({ motion: 0.81, brightness: 0.72, saturation: 0.58 })
+    expect(plan.segments[0]?.visual).toEqual({
+      motion: 0.81,
+      brightness: 0.72,
+      saturation: 0.58,
+      labels: []
+    })
   })
 
   it('normalizes custom multi-objective weights and explains keyword evidence', () => {

@@ -26,6 +26,7 @@ interface Candidate {
     motion: number
     brightness: number
     saturation: number
+    labels: string[]
   }
 }
 
@@ -93,7 +94,7 @@ function makeFactors(candidate: Candidate, weights: PlanStrategy['weights']): Pl
       label: '画面信号',
       value: candidate.visualScore,
       weight: weights.visual ?? 0,
-      detail: `运动 ${candidate.visual.motion.toFixed(2)} · 亮度 ${candidate.visual.brightness.toFixed(2)} · 饱和度 ${candidate.visual.saturation.toFixed(2)}`
+      detail: `运动 ${candidate.visual.motion.toFixed(2)} · 亮度 ${candidate.visual.brightness.toFixed(2)} · 饱和度 ${candidate.visual.saturation.toFixed(2)}${candidate.visual.labels.length ? ` · 线索 ${candidate.visual.labels.join('、')}` : ''}`
     })
   }
   if (candidate.titleKeywords.length > 0) {
@@ -128,7 +129,9 @@ function makeReasons(candidate: Candidate, factors: PlanFactor[]): string[] {
   }
   if (candidate.durationScore < 0.25) reasons.push('片段过短或过长，建议先接受再手动裁剪')
   if (candidate.visualScore > 0) {
-    reasons.push(`画面运动 ${candidate.visual.motion.toFixed(2)}，亮度 ${candidate.visual.brightness.toFixed(2)}`)
+    reasons.push(candidate.visual.labels.length
+      ? `画面线索：${candidate.visual.labels.join('、')}（运动 ${candidate.visual.motion.toFixed(2)}）`
+      : `画面运动 ${candidate.visual.motion.toFixed(2)}，亮度 ${candidate.visual.brightness.toFixed(2)}`)
   }
   if (reasons.length === 0) reasons.push('综合信号较弱，适合作为备选素材')
   return reasons
@@ -214,6 +217,16 @@ function candidateWindows(input: PlannerInput): Candidate[] {
       const saturation = overlappingSignals.length > 0
         ? overlappingSignals.reduce((total, signal) => total + signal.saturation, 0) / overlappingSignals.length
         : 0
+      const labelCounts = new Map<string, number>()
+      for (const signal of overlappingSignals) {
+        for (const label of [...(signal.labels ?? []), ...signal.objects.map((item) => item.name)]) {
+          labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1)
+        }
+      }
+      const labels = [...labelCounts.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, 4)
+        .map(([label]) => label)
 
       return {
         mediaId: window.mediaId,
@@ -224,7 +237,7 @@ function candidateWindows(input: PlannerInput): Candidate[] {
         intentScore: clampNumber(matchedKeywords.length * 0.42, 0, 1),
         durationScore: duration >= 2 && duration <= 25 ? 0.85 : duration < 2 ? 0.3 : 0.55,
         visualScore,
-        visual: { motion: visualScore, brightness, saturation },
+        visual: { motion: visualScore, brightness, saturation, labels },
         matchedKeywords,
         titleKeywords,
         overlapIds: speech.map((segment) => segment.id),
@@ -354,7 +367,9 @@ function commandsForSegments(
           transform: transform(),
           effects: [],
           volume: 1
-          ,transitionIn: segment.transition === 'cut' ? 'none' : segment.transition
+          ,transitionIn: segment.transition === 'cut' ? 'none' : segment.transition,
+          transitionOut: 'none',
+          transitionDuration: .5
         }
       }
     }, commands.length))

@@ -37,6 +37,8 @@ type ExportQuality = 'fast' | 'balanced' | 'quality'
 type DeliveryPresetId = 'short' | 'tutorial' | 'archive' | 'review'
 type MetadataFormat = 'fcpxml' | 'jianying'
 type ClipDragMode = 'move' | 'trim-start' | 'trim-end'
+type WorkflowPresetId = DeliveryPresetId
+type WorkflowPlanGoal = PlannerGoal
 type WorkstationDeliveryPreset = {
   targetSeconds: number
   width: number
@@ -45,6 +47,18 @@ type WorkstationDeliveryPreset = {
   quality: ExportQuality
   ducking: boolean
   exportName: string
+}
+type WorkflowTemplate = {
+  id: WorkflowPresetId
+  label: string
+  detail: string
+  plan: {
+    goal: WorkflowPlanGoal
+    instruction: string
+    strategyId: PlanStrategy['id']
+    candidateLimit: number
+  }
+  delivery: WorkstationDeliveryPreset
 }
 
 interface Thumbnail {
@@ -260,6 +274,19 @@ const exportQualityMap: Record<ExportQuality, { crf: number; preset: string; lab
   quality: { crf: 17, preset: 'slow', label: '高画质' }
 }
 
+function topVisualLabels(signals: VisualSignal[]): string[] {
+  const counts = new Map<string, number>()
+  for (const signal of signals) {
+    for (const label of signal.labels ?? []) {
+      counts.set(label, (counts.get(label) ?? 0) + 1)
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 5)
+    .map(([label]) => label)
+}
+
 const weightLabels: Record<keyof PlanWeights, string> = {
   scene: '场景变化',
   speech: '语音密度',
@@ -269,35 +296,34 @@ const weightLabels: Record<keyof PlanWeights, string> = {
   keyword: '标题关键词'
 }
 
-const deliveryPresets: Array<{
-  id: DeliveryPresetId
-  label: string
-  detail: string
-  apply: WorkstationDeliveryPreset
-}> = [
+const workflowTemplates: WorkflowTemplate[] = [
   {
     id: 'short',
     label: '短视频 1080p',
     detail: '30 秒 · 1080p · 30fps · 快速',
-    apply: { targetSeconds: 30, width: 1920, height: 1080, frameRate: 30, quality: 'fast', ducking: true, exportName: 'exports/短视频.mp4' }
+    plan: { goal: 'highlights', instruction: '高光 快节奏', strategyId: 'visual', candidateLimit: 96 },
+    delivery: { targetSeconds: 30, width: 1920, height: 1080, frameRate: 30, quality: 'fast', ducking: true, exportName: 'exports/短视频.mp4' }
   },
   {
     id: 'tutorial',
     label: '教程讲解',
     detail: '120 秒 · 1080p · 30fps · 均衡',
-    apply: { targetSeconds: 120, width: 1920, height: 1080, frameRate: 30, quality: 'balanced', ducking: true, exportName: 'exports/教程.mp4' }
+    plan: { goal: 'tutorial', instruction: '教程 步骤 重点', strategyId: 'speech', candidateLimit: 120 },
+    delivery: { targetSeconds: 120, width: 1920, height: 1080, frameRate: 30, quality: 'balanced', ducking: true, exportName: 'exports/教程.mp4' }
   },
   {
     id: 'archive',
     label: '长视频概要',
     detail: '300 秒 · 720p · 24fps · 均衡',
-    apply: { targetSeconds: 300, width: 1280, height: 720, frameRate: 24, quality: 'balanced', ducking: false, exportName: 'exports/概要.mp4' }
+    plan: { goal: 'summary', instruction: '概要 结构 重点', strategyId: 'balanced', candidateLimit: 160 },
+    delivery: { targetSeconds: 300, width: 1280, height: 720, frameRate: 24, quality: 'balanced', ducking: false, exportName: 'exports/概要.mp4' }
   },
   {
     id: 'review',
     label: '快速审阅',
     detail: '60 秒 · 480p · 24fps · 快速',
-    apply: { targetSeconds: 60, width: 854, height: 480, frameRate: 24, quality: 'fast', ducking: false, exportName: 'exports/审阅.mp4' }
+    plan: { goal: 'summary', instruction: '', strategyId: 'balanced', candidateLimit: 48 },
+    delivery: { targetSeconds: 60, width: 854, height: 480, frameRate: 24, quality: 'fast', ducking: false, exportName: 'exports/审阅.mp4' }
   }
 ]
 
@@ -515,13 +541,14 @@ export function Workstation() {
     return snapped === undefined ? null : Math.max(0, snapped)
   }
 
-  function applyDeliveryPreset(preset: typeof deliveryPresets[number]) {
+  function applyWorkflowTemplate(template: WorkflowTemplate) {
+    const preset = template.delivery
     const next = updateMetaTime({
       ...project,
-      meta: { ...project.meta, width: preset.apply.width, height: preset.apply.height, frameRate: preset.apply.frameRate },
+      meta: { ...project.meta, width: preset.width, height: preset.height, frameRate: preset.frameRate },
       narrationSettings: {
         ...project.narrationSettings,
-        audioDucking: { ...project.narrationSettings?.audioDucking, enabled: preset.apply.ducking }
+        audioDucking: { ...project.narrationSettings?.audioDucking, enabled: preset.ducking }
       }
     })
     dispatch({
@@ -529,11 +556,15 @@ export function Workstation() {
       kind: 'project.set',
       payload: { project: next }
     }, next)
-    setNarrationDucking(preset.apply.ducking)
-    setTargetSeconds(preset.apply.targetSeconds)
-    setExportQuality(preset.apply.quality)
-    setExportName(preset.apply.exportName)
-    setMessage(`已应用交付预设：${preset.label}`)
+    setNarrationDucking(preset.ducking)
+    setTargetSeconds(preset.targetSeconds)
+    setExportQuality(preset.quality)
+    setExportName(preset.exportName)
+    setPlanGoal(template.plan.goal)
+    setInstruction(template.plan.instruction)
+    setPlanStrategy(template.plan.strategyId)
+    setPlanCandidateLimit(template.plan.candidateLimit)
+    setMessage(`已应用工作流模板：${template.label}`)
   }
 
   function snapTime(time: number, ignoreClipIds: string[] = []) {
@@ -2069,6 +2100,7 @@ export function Workstation() {
                       <button onClick={(event) => {
                         event.stopPropagation()
                         void analyzeAsset(asset, asset.kind === 'video' ? 'all' : 'speech')
+                          .then(() => analyzeVisual(asset))
                           .then(() => setMessage('素材分析完成'))
                           .catch((error) => setMessage(error instanceof Error ? error.message : '分析失败'))
                           .finally(() => {
@@ -2131,6 +2163,13 @@ export function Workstation() {
                     亮度 {(selectedVisual.reduce((total, item) => total + item.brightness, 0) / selectedVisual.length).toFixed(2)} ·
                     饱和度 {(selectedVisual.reduce((total, item) => total + item.saturation, 0) / selectedVisual.length).toFixed(2)}
                   </span>
+                  {(topVisualLabels(selectedVisual).length > 0 || selectedVisual.some((item) => item.objects.length > 0)) ? (
+                    <span className="visual-labels">
+                      线索 {[
+                        ...new Set(selectedVisual.flatMap((item) => [...(item.labels ?? []), ...item.objects.map((object) => object.name)]))
+                      ].slice(0, 6).join(' · ')}
+                    </span>
+                  ) : null}
                 </div>
               ) : null}
               {selectedSpeech.length === 0 && selectedScenes.length === 0 ? (
@@ -2702,17 +2741,17 @@ export function Workstation() {
           <section className="panel-section">
             <div className="section-head"><h2>导出设置</h2></div>
             <div className="preset-grid">
-              {deliveryPresets.map((preset) => (
+              {workflowTemplates.map((template) => (
                 <button
-                  key={preset.id}
-                  title={preset.detail}
-                  onClick={() => applyDeliveryPreset(preset)}
+                  key={template.id}
+                  title={template.detail}
+                  onClick={() => applyWorkflowTemplate(template)}
                 >
-                  {preset.label}
+                  {template.label}
                 </button>
               ))}
             </div>
-            <p className="export-note">预设同步调整方案时长、交付规格与混音避让。</p>
+            <p className="export-note">模板同步调整分析意图、方案策略、候选池、交付规格与混音避让。</p>
             <label className="field">
               <span>画质</span>
               <select value={exportQuality} onChange={(event) => setExportQuality(event.target.value as ExportQuality)}>

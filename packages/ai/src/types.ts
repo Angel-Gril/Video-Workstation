@@ -23,6 +23,7 @@ export interface VisualSignal {
   saturation: number
   motion: number
   objects: Array<{ name: string; score: number }>
+  labels?: string[] | undefined
 }
 
 export interface CaptionDraft {
@@ -52,6 +53,7 @@ export interface StorySegment {
     motion: number
     brightness: number
     saturation: number
+    labels?: string[] | undefined
   }
   narration?: string | undefined
 }
