@@ -658,6 +658,17 @@ def clamp_expr(expression: str, low: float, high: float) -> str:
     return f"min({number_literal(high)},max({number_literal(low)},{expression}))"
 
 
+def ffmpeg_progress_expression(numerator: str, offset: float, duration: float) -> str:
+    start = offset
+    end = offset + duration
+    if duration <= 0:
+        return "1" if offset >= 0 else "0"
+    return (
+        f"if(lt({numerator},{start:.9f}),0,"
+        f"if(gt({numerator},{end:.9f}),1,({numerator}-{start:.9f})/{duration:.9f}))"
+    )
+
+
 def replace_time_var(expression: str, time_var: str) -> str:
     return expression.replace(time_var, "t")
 
@@ -721,10 +732,10 @@ def wipe_alpha_expression(
     frame_rate: float,
 ) -> str:
     if direction == "in":
-        progress = f"clip((N/{frame_rate:.9f})/{transition_duration:.9f},0,1)"
+        progress = ffmpeg_progress_expression(f"N/{frame_rate:.9f}", 0, transition_duration)
     else:
         offset = max(0.0, duration - transition_duration)
-        progress = f"clip((N/{frame_rate:.9f}-{offset:.9f})/{transition_duration:.9f},0,1)"
+        progress = ffmpeg_progress_expression(f"N/{frame_rate:.9f}", offset, transition_duration)
     if kind == "wipe-left":
         boundary = f"W*{progress}" if direction == "in" else f"W*(1-{progress})"
         return f"255*lt(X,{boundary})"
@@ -750,10 +761,10 @@ def slide_overlay_expression(
     duration: float,
 ) -> str:
     if direction == "in":
-        progress = f"clip((t-{timeline_start:.9f})/{transition_duration:.9f},0,1)"
+        progress = ffmpeg_progress_expression("t", timeline_start, transition_duration)
     else:
         offset = max(0.0, duration - transition_duration)
-        progress = f"clip((t-{timeline_start + offset:.9f})/{transition_duration:.9f},0,1)"
+        progress = ffmpeg_progress_expression("t", timeline_start + offset, transition_duration)
     base = f"(main_w-overlay_w)/2+{position_x}"
     if kind == "slide-left":
         offset_expression = f"main_w*(1-{progress})" if direction == "in" else f"-main_w*{progress}"
@@ -1017,20 +1028,46 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
                 if edge_kind in ("zoom-in", "blur-in"):
                     transition_duration = min(clip_transition_duration, duration * .25)
                     progress_expr = (
-                        f"clip((N/{frame_rate:.9f})/{transition_duration:.9f},0,1)"
+                        ffmpeg_progress_expression(f"N/{frame_rate:.9f}", 0, transition_duration)
                         if edge == "in"
-                        else f"clip((N/{frame_rate:.9f}-{max(0.0, duration - transition_duration):.9f})/{transition_duration:.9f},0,1)"
+                        else ffmpeg_progress_expression(
+                            f"N/{frame_rate:.9f}",
+                            max(0.0, duration - transition_duration),
+                            transition_duration,
+                        )
                     )
                     if edge_kind == "zoom-in":
-                        zoom_progress = progress_expr if edge == "in" else f"(1-{progress_expr})"
+                        offset_seconds = 0.0 if edge == "in" else max(0.0, duration - transition_duration)
+                        zoom_progress = (
+                            "min(1,max(0,"
+                            f"({{IN}}-{offset_seconds * frame_rate:.9f})/"
+                            f"{transition_duration * frame_rate:.9f}))"
+                        ).replace("{IN}", "in")
+                        if edge == "out":
+                            zoom_progress = f"1-{zoom_progress}"
                         chain.append(
-                            f"scale=w='max(2,trunc(iw*(1+0.18*({zoom_progress})))/2)*2':"
-                            f"h='max(2,trunc(ih*(1+0.18*({zoom_progress})))/2)*2':eval=frame"
+                            "zoompan="
+                            f"z='1+0.18*({zoom_progress})':"
+                            "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                            f"d=1:s={scale}x{height}:fps=30"
                         )
                     else:
-                        blur_progress = progress_expr if edge == "in" else f"(1-{progress_expr})"
+                        # gblur does not re-evaluate sigma per frame. Blend the
+                        # original frame with a fixed-strength blur using a
+                        # time-varying weight instead.
+                        blur_weight = (
+                            f"if(gte({progress_expr},1),0,1-{progress_expr})"
+                            if edge == "in"
+                            else f"if(lte({progress_expr},0),0,{progress_expr})"
+                        )
+                        blur_weight = escape_filter_commas(blur_weight)
+                        raw_label = f"blurraw{index}"
+                        blurred_label = f"blurred{index}"
                         chain.append(
-                            f"gblur=sigma='min(24,max(0,18*(1-{blur_progress})))':eval=frame"
+                            f"split=2[blurbase{index}][{raw_label}];"
+                            f"[{raw_label}]gblur=sigma=18[{blurred_label}];"
+                            f"[blurbase{index}][{blurred_label}]"
+                            f"blend=all_expr='A*(1-{blur_weight})+B*{blur_weight}'"
                         )
             if transition_in != "none":
                 transition_duration = min(clip_transition_duration, duration * .25)
