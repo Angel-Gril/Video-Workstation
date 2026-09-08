@@ -8,7 +8,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:7350',
+        target: process.env.WORKSTATION_API_URL || 'http://127.0.0.1:7350',
         changeOrigin: true
       }
     }

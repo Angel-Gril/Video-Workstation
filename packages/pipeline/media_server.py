@@ -1453,8 +1453,15 @@ class MediaHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/health":
                 self.send_json(HTTPStatus.OK, {
                     "ok": True,
+                    "version": 1,
                     "ffmpeg": bool(shutil.which("ffmpeg") or (os.environ.get("FFMPEG_PATH") and Path(os.environ["FFMPEG_PATH"]).is_file())),
                     "ffprobe": bool(ffprobe_binary()),
+                    "agentTools": [
+                        "POST /api/agent/execute",
+                        "POST /api/agent/plan",
+                        "POST /api/agent/apply-plan",
+                        "POST /api/agent/export",
+                    ],
                 })
                 return
             if parsed.path == "/api/media/stream":
