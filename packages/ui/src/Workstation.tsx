@@ -41,6 +41,15 @@ type PlannerGoal = 'summary' | 'highlights' | 'tutorial'
 type ExportQuality = 'fast' | 'balanced' | 'quality'
 type DeliveryPresetId = 'short' | 'vertical' | 'tutorial' | 'archive' | 'review'
 type MetadataFormat = 'fcpxml' | 'jianying'
+type BatchOutputPreset = {
+  id: 'vertical' | 'square' | 'review'
+  label: string
+  width: number
+  height: number
+  frameRate: number
+  quality: ExportQuality
+  suffix: string
+}
 type ClipDragMode = 'move' | 'trim-start' | 'trim-end'
 type WorkflowPresetId = DeliveryPresetId
 type WorkflowPlanGoal = PlannerGoal
@@ -279,6 +288,12 @@ const exportQualityMap: Record<ExportQuality, { crf: number; preset: string; lab
   quality: { crf: 17, preset: 'slow', label: '高画质' }
 }
 
+const batchOutputPresets: BatchOutputPreset[] = [
+  { id: 'vertical', label: '竖屏 1080×1920', width: 1080, height: 1920, frameRate: 30, quality: 'balanced', suffix: 'vertical' },
+  { id: 'square', label: '方形 1080×1080', width: 1080, height: 1080, frameRate: 30, quality: 'balanced', suffix: 'square' },
+  { id: 'review', label: '审阅 854×480', width: 854, height: 480, frameRate: 24, quality: 'fast', suffix: 'review' }
+]
+
 function topVisualLabels(signals: VisualSignal[]): string[] {
   const counts = new Map<string, number>()
   for (const signal of signals) {
@@ -395,6 +410,7 @@ export function Workstation() {
   const [exportProgress, setExportProgress] = useState<number | null>(null)
   const [exportQuality, setExportQuality] = useState<ExportQuality>('balanced')
   const [exportName, setExportName] = useState('exports/输出.mp4')
+  const [batchExportProgress, setBatchExportProgress] = useState<string | null>(null)
   const [selectedEffect, setSelectedEffect] = useState<EffectKind>('opacity')
   const [message, setMessage] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
@@ -2196,6 +2212,60 @@ export function Workstation() {
     }
   }
 
+  async function exportBatch() {
+    try {
+      const issues = validateProject(project)
+      if (issues.length > 0) throw new Error(issues[0]!.message)
+      const basePlan = timelineToExportPlan(project)
+      if (basePlan.video.length === 0 && basePlan.audio.length === 0) {
+        throw new Error('没有可导出的媒体片段')
+      }
+      for (const entry of basePlan.video) {
+        const clip = project.timeline.tracks.flatMap((track) => track.clips).find((item) => item.id === entry.id)
+        const asset = project.media.find((item) => item.id === clip?.mediaId)
+        entry.hasAudio = asset?.audioChannels !== 0
+      }
+      const basename = (exportName.trim() || 'exports/输出.mp4').replace(/\.mp4$/i, '')
+      setExporting(true)
+      for (const [index, preset] of batchOutputPresets.entries()) {
+        setExportProgress(0)
+        setBatchExportProgress(`${index + 1}/${batchOutputPresets.length} · ${preset.label}`)
+        const plan: typeof basePlan = {
+          ...basePlan,
+          meta: { ...basePlan.meta, width: preset.width, height: preset.height, frameRate: preset.frameRate },
+          quality: exportQualityMap[preset.quality]
+        }
+        const response = await fetch('/api/export', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ plan, output: `${basename}-${preset.suffix}.mp4` })
+        })
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.error ?? '批量导出失败')
+        for (;;) {
+          await new Promise((resolve) => setTimeout(resolve, 450))
+          const jobResponse = await fetch(`/api/jobs/${data.jobId}`)
+          const job = await jobResponse.json()
+          if (!jobResponse.ok) throw new Error(job.error ?? '批量导出任务查询失败')
+          setExportProgress(typeof job.progress === 'number' ? job.progress : null)
+          if (job.status === 'completed') {
+            setMessage(`批量导出完成：${job.result.output}`)
+            break
+          }
+          if (job.status === 'failed') throw new Error(job.error ?? '批量导出失败')
+        }
+      }
+      setBatchExportProgress(null)
+      setMessage(`批量导出完成：${batchOutputPresets.length} 个输出`)
+    } catch (error) {
+      setBatchExportProgress(null)
+      setMessage(error instanceof Error ? error.message : '批量导出失败')
+    } finally {
+      setExporting(false)
+      setExportProgress(null)
+    }
+  }
+
   function generateCaptionsFromSpeech(asset: MediaAsset) {
     const segments = speechByAsset.get(asset.id) ?? []
     if (segments.length === 0) {
@@ -3165,6 +3235,9 @@ export function Workstation() {
             </p>
             <div className="export-grid">
               <button onClick={() => void exportProject('mp4')} disabled={exporting || serviceOnline === false}>MP4</button>
+              <button onClick={() => void exportBatch()} disabled={exporting || serviceOnline === false}>
+                {batchExportProgress ?? '批量'}
+              </button>
               <button onClick={() => void exportProject('fcpxml')} disabled={exporting}>FCPXML</button>
               <button onClick={() => void exportProject('jianying')} disabled={exporting}>剪映草稿</button>
             </div>

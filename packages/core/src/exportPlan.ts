@@ -33,6 +33,11 @@ export interface ExportPlanEntry {
 
 export interface ExportPlan {
   meta: Project['meta']
+  quality?: {
+    crf: number
+    preset: string
+    label: string
+  }
   narrationVoice?: string | undefined
   narrationRate?: string | undefined
   audioDucking?: {
