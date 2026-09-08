@@ -2826,7 +2826,13 @@ export function Workstation() {
                   style={activePreviewStyle}
                   controls={false}
                   playsInline
-                  onError={() => setPreviewError('当前浏览器无法解码该素材，可尝试 Edge/Chrome 或先转码为 H.264 MP4')}
+                  onError={() => {
+                    if (!previewAsset?.previewPath) {
+                      void createPreviewProxy(previewAsset!)
+                    } else {
+                      setPreviewError('兼容预览也无法解码，请检查素材是否损坏')
+                    }
+                  }}
                   onTimeUpdate={(event) => {
                     const sourceTime = event.currentTarget.currentTime
                     if (previewSource.mode === 'timeline' && activeTimelineClip) {
