@@ -96,6 +96,9 @@ export interface Track {
   locked: boolean
   muted: boolean
   hidden: boolean
+  gain?: number | undefined
+  fadeIn?: number | undefined
+  fadeOut?: number | undefined
 }
 
 export interface Timeline {

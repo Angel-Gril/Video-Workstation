@@ -1067,6 +1067,18 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
             else:
                 clip = music_clips[index - len(video_clips) - len(audio_clips)]
             volume = clamp(float(clip.get("volume", 1)), 0, 2)
+            try:
+                track_gain = clamp(float(clip.get("trackGain", 1)), 0, 2)
+            except (TypeError, ValueError):
+                track_gain = 1
+            try:
+                track_fade_in = max(0, min(30, float(clip.get("trackFadeIn", 0))))
+            except (TypeError, ValueError):
+                track_fade_in = 0
+            try:
+                track_fade_out = max(0, min(30, float(clip.get("trackFadeOut", 0))))
+            except (TypeError, ValueError):
+                track_fade_out = 0
             delay_ms = max(0, int(round(float(clip.get("timelineStart", 0)) * 1000)))
             clip_duration = max(0.0, float(clip.get("duration", 0)))
             source_chain = audio_processing_chain(clip)
@@ -1097,6 +1109,21 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
                 gain_expr = f"min({gain_expr},{background_ducking_expression()})"
             else:
                 gain_expr = background_ducking_expression()
+            if track_fade_in > 0:
+                track_parts = [f"min(t/{track_fade_in:.9f},1)"]
+            else:
+                track_parts = []
+            if track_fade_out > 0:
+                track_parts.append(f"min(max((({clip_duration:.9f}-t)/{track_fade_out:.9f}),0),1)")
+            if track_parts:
+                track_gain_expr = "*".join(track_parts)
+                gain_expr = gain_expr if gain_expr == "1" else f"min({gain_expr},{track_gain_expr})"
+                track_gain_expr = f"{track_gain_expr}*{track_gain:.6f}"
+                gain_expr = f"{gain_expr}*{track_gain:.6f}"
+            else:
+                track_gain_expr = f"{track_gain:.6f}"
+            if not track_parts:
+                gain_expr = gain_expr if gain_expr == "1" else f"min({gain_expr},{track_gain:.6f})"
             filters.append(f"[mix{index}]volume='{escape_filter_commas(gain_expr)}':eval=frame[amix{index}]")
             audio_mixin_labels[index] = f"[amix{index}]"
         mix_labels = "".join(audio_mixin_labels[index] for index in audio_mixin_inputs)

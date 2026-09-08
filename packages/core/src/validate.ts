@@ -39,6 +39,15 @@ export function validateProject(project: Project): ValidationIssue[] {
     if (!trackKinds.has(track.kind)) {
       issues.push({ path: `${trackPath}.kind`, message: 'Unknown track kind' })
     }
+    if (track.gain !== undefined && (!Number.isFinite(track.gain) || track.gain < 0 || track.gain > 2)) {
+      issues.push({ path: `${trackPath}.gain`, message: 'Track gain must be between 0 and 2' })
+    }
+    for (const key of ['fadeIn', 'fadeOut'] as const) {
+      const value = track[key]
+      if (value !== undefined && (!Number.isFinite(value) || value < 0 || value > 30)) {
+        issues.push({ path: `${trackPath}.${key}`, message: 'Track fade must be between 0 and 30 seconds' })
+      }
+    }
     for (const [clipIndex, clip] of track.clips.entries()) {
       const path = `${trackPath}.clips.${clipIndex}`
       validateClip(clip, clipIds, mediaIds, track, issues, path)

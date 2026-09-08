@@ -13,6 +13,9 @@ export interface ExportPlanEntry {
   transform?: TimelineClip['transform']
   text?: string
   volume?: number
+  trackGain?: number
+  trackFadeIn?: number
+  trackFadeOut?: number
   hasAudio?: boolean | undefined
   muted?: boolean | undefined
   videoStreamIndex?: number | undefined
@@ -62,6 +65,9 @@ export function clipToPlanEntry(project: Project, clip: TimelineClip): ExportPla
   }
 
   if (track?.muted) entry.muted = true
+  if (track?.gain !== undefined) entry.trackGain = track.gain
+  if (track?.fadeIn !== undefined) entry.trackFadeIn = track.fadeIn
+  if (track?.fadeOut !== undefined) entry.trackFadeOut = track.fadeOut
   if (asset.videoStreamIndex !== undefined) entry.videoStreamIndex = asset.videoStreamIndex
   if (asset.audioStreamIndex !== undefined) entry.audioStreamIndex = asset.audioStreamIndex
   if (clip.transitionIn) entry.transitionIn = clip.transitionIn

@@ -1746,6 +1746,13 @@ export function Workstation() {
     dispatch({ id: uid('cmd-track-state'), kind: 'project.set', payload: { project: next } }, next)
   }
 
+  function updateTrackAudio(track: Track, patch: Pick<Track, 'gain' | 'fadeIn' | 'fadeOut'>) {
+    const nextTrack = { ...track, ...patch }
+    const tracks = project.timeline.tracks.map((item) => item.id === track.id ? nextTrack : item)
+    const next = updateMetaTime({ ...project, timeline: { ...project.timeline, tracks } })
+    dispatch({ id: uid('cmd-track-audio'), kind: 'project.set', payload: { project: next } }, next)
+  }
+
   function addTrack(kind: TrackKind) {
     const track: Track = {
       id: uid(`track-${kind}`),
@@ -2672,7 +2679,21 @@ export function Workstation() {
                       </div>
                       <div className="track-controls">
                         <button className={track.muted ? 'active' : ''} onClick={() => toggleTrackState(track, 'muted')} title="静音">M</button>
-                        <button className={track.hidden ? 'active' : ''} onClick={() => toggleTrackState(track, 'hidden')} title="隐藏">H</button>
+                        {(track.kind === 'video' || track.kind === 'audio' || track.kind === 'music') ? (
+                          <input
+                            className="track-gain"
+                            type="range"
+                            min={0}
+                            max={2}
+                            step={.01}
+                            value={track.gain ?? 1}
+                            title={`轨道增益 ${(track.gain ?? 1).toFixed(2)}`}
+                            aria-label={`${track.kind} 轨道增益`}
+                            onChange={(event) => updateTrackAudio(track, { gain: Number(event.target.value) })}
+                          />
+                        ) : (
+                          <button className={track.hidden ? 'active' : ''} onClick={() => toggleTrackState(track, 'hidden')} title="隐藏">H</button>
+                        )}
                         <button className={track.locked ? 'active' : ''} onClick={() => toggleTrackState(track, 'locked')} title="锁定">L</button>
                       </div>
                     </div>
