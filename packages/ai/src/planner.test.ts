@@ -103,6 +103,7 @@ describe('narrative planner', () => {
       motion: 0.81,
       brightness: 0.72,
       saturation: 0.58,
+      detail: 0.81,
       labels: []
     })
   })

@@ -26,6 +26,7 @@ interface Candidate {
     motion: number
     brightness: number
     saturation: number
+    detail: number
     labels: string[]
   }
 }
@@ -35,19 +36,19 @@ export const planStrategies: PlanStrategy[] = [
     id: 'balanced',
     label: '均衡',
     description: '兼顾画面变化、语音密度、意图命中和片段节奏。',
-    weights: { scene: 0.26, speech: 0.22, intent: 0.16, duration: 0.10, visual: 0.14, keyword: 0.12 }
+    weights: { scene: 0.24, speech: 0.20, intent: 0.15, duration: 0.10, visual: 0.13, detail: 0.08, keyword: 0.10 }
   },
   {
     id: 'visual',
     label: '视觉优先',
     description: '优先保留画面变化明显的高能片段。',
-    weights: { scene: 0.32, speech: 0.10, intent: 0.10, duration: 0.10, visual: 0.24, keyword: 0.14 }
+    weights: { scene: 0.30, speech: 0.10, intent: 0.10, duration: 0.10, visual: 0.21, detail: 0.10, keyword: 0.09 }
   },
   {
     id: 'speech',
     label: '叙述优先',
     description: '优先保留完整、密集的讲解与关键语句。',
-    weights: { scene: 0.10, speech: 0.36, intent: 0.18, duration: 0.08, visual: 0.10, keyword: 0.18 }
+    weights: { scene: 0.10, speech: 0.33, intent: 0.17, duration: 0.08, visual: 0.09, detail: 0.05, keyword: 0.18 }
   }
 ]
 
@@ -96,6 +97,15 @@ function makeFactors(candidate: Candidate, weights: PlanStrategy['weights']): Pl
       weight: weights.visual ?? 0,
       detail: `运动 ${candidate.visual.motion.toFixed(2)} · 亮度 ${candidate.visual.brightness.toFixed(2)} · 饱和度 ${candidate.visual.saturation.toFixed(2)}${candidate.visual.labels.length ? ` · 线索 ${candidate.visual.labels.join('、')}` : ''}`
     })
+    if (candidate.visual.detail > 0) {
+      factors.push({
+        id: 'detail',
+        label: '画面细节',
+        value: candidate.visual.detail,
+        weight: weights.detail ?? 0,
+        detail: `综合细节 ${candidate.visual.detail.toFixed(2)}${candidate.visual.labels.includes('画面细节') ? ' · 高纹理/构图信息' : ''}`
+      })
+    }
   }
   if (candidate.titleKeywords.length > 0) {
     factors.push({
@@ -217,6 +227,12 @@ function candidateWindows(input: PlannerInput): Candidate[] {
       const saturation = overlappingSignals.length > 0
         ? overlappingSignals.reduce((total, signal) => total + signal.saturation, 0) / overlappingSignals.length
         : 0
+      const detail = overlappingSignals.length > 0
+        ? clampNumber(overlappingSignals.reduce(
+          (total, signal) => total + Math.max(signal.motion, signal.labels?.includes('画面细节') ? .68 : 0),
+          0
+        ) / overlappingSignals.length, 0, 1)
+        : 0
       const labelCounts = new Map<string, number>()
       for (const signal of overlappingSignals) {
         for (const label of [...(signal.labels ?? []), ...signal.objects.map((item) => item.name)]) {
@@ -237,7 +253,7 @@ function candidateWindows(input: PlannerInput): Candidate[] {
         intentScore: clampNumber(matchedKeywords.length * 0.42, 0, 1),
         durationScore: duration >= 2 && duration <= 25 ? 0.85 : duration < 2 ? 0.3 : 0.55,
         visualScore,
-        visual: { motion: visualScore, brightness, saturation, labels },
+        visual: { motion: visualScore, brightness, saturation, detail, labels },
         matchedKeywords,
         titleKeywords,
         overlapIds: speech.map((segment) => segment.id),
@@ -247,7 +263,7 @@ function candidateWindows(input: PlannerInput): Candidate[] {
     .sort((a, b) => a.start - b.start)
 }
 
-const weightIds: Array<PlanFactor['id']> = ['scene', 'speech', 'intent', 'duration', 'visual', 'keyword']
+const weightIds: Array<PlanFactor['id']> = ['scene', 'speech', 'intent', 'duration', 'visual', 'detail', 'keyword']
 
 function normalizedWeights(
   strategy: PlanStrategy['weights'],

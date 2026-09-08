@@ -313,6 +313,7 @@ const weightLabels: Record<keyof PlanWeights, string> = {
   intent: '意图命中',
   duration: '片段节奏',
   visual: '画面信号',
+  detail: '画面细节',
   keyword: '标题关键词'
 }
 

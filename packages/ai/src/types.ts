@@ -53,13 +53,14 @@ export interface StorySegment {
     motion: number
     brightness: number
     saturation: number
+    detail?: number | undefined
     labels?: string[] | undefined
   }
   narration?: string | undefined
 }
 
 export interface PlanFactor {
-  id: 'scene' | 'speech' | 'intent' | 'duration' | 'visual' | 'keyword'
+  id: 'scene' | 'speech' | 'intent' | 'duration' | 'visual' | 'detail' | 'keyword'
   label: string
   value: number
   weight: number
@@ -79,6 +80,7 @@ export interface PlanWeights {
   intent?: number | undefined
   duration?: number | undefined
   visual?: number | undefined
+  detail?: number | undefined
   keyword?: number | undefined
 }
 
