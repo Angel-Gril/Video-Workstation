@@ -126,6 +126,45 @@ describe('timeline reducer', () => {
     expect(restored.project.timeline.tracks[0]!.clips).toEqual(project.timeline.tracks[0]!.clips)
   })
 
+  it('applies batched transform patches as one undoable step', () => {
+    const secondClip: TimelineClip = {
+      ...clip,
+      id: 'clip-2',
+      timelineStart: 5,
+      transform: { ...clip.transform, rotation: 4 }
+    }
+    const next = applyCommand(project, {
+      id: 'cmd-add-2',
+      kind: 'clip.add',
+      payload: { clip: secondClip }
+    })
+    const batch = batchCommand(next, [
+      {
+        id: 'cmd-transform-1',
+        kind: 'clip.transform',
+        payload: {
+          clipId: clip.id,
+          transform: { ...clip.transform, scale: 1.25 }
+        }
+      },
+      {
+        id: 'cmd-transform-2',
+        kind: 'clip.transform',
+        payload: {
+          clipId: secondClip.id,
+          transform: { ...secondClip.transform, rotation: 12 }
+        }
+      }
+    ], '批量变换')
+    const applied = prepareCommand(next, batch, [], [])
+    const clips = applied.project.timeline.tracks[0]!.clips
+
+    expect(clips[0]!.transform.scale).toBe(1.25)
+    expect(clips[1]!.transform.rotation).toBe(12)
+    const restored = undo(applied.project, applied.history, applied.future)
+    expect(restored.project.timeline.tracks[0]!.clips).toEqual(next.timeline.tracks[0]!.clips)
+  })
+
   it('finds overlapping clips at a time point', () => {
     const next = applyCommand(project, command)
     expect(findClipsAt(next, 1)).toHaveLength(1)

@@ -397,7 +397,7 @@ def visual_signals(path: Path, samples: int = 16) -> list[dict[str, Any]]:
                 minSize=(int(gray.shape[0] * .08), int(gray.shape[0] * .08)),
             )
             for (x, y, width, height) in faces[:5]:
-                objects.append({"name": "人脸", "score": 0.9})
+                objects.append({"name": "人脸", "score": 0.9, "box": [int(x), int(y), int(width), int(height)]})
             if len(objects):
                 labels.append("人物")
             if motion >= .08:
@@ -781,8 +781,44 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
             timeline_start = float(clip.get("timelineStart", 0))
             duration = max(0.0, float(clip.get("duration", 0)))
             transform = clip.get("transform", {})
+            reframe = transform.get("reframe", {}) if isinstance(transform.get("reframe", {}), dict) else {}
+            try:
+                source_width = float(clip.get("sourceWidth", transform.get("reframe", {}).get("source", {}).get("width", 0)))
+                source_height = float(clip.get("sourceHeight", transform.get("reframe", {}).get("source", {}).get("height", 0)))
+            except (TypeError, ValueError):
+                source_width = source_height = 0
+            source_aspect = source_width / source_height if source_width > 0 and source_height > 0 else None
             position_y = float(transform.get("y", 0))
-            chain = [f"scale={scale}:{height}:force_original_aspect_ratio=decrease", "setsar=1"]
+            if source_aspect and reframe.get("scale"):
+                try:
+                    reframe_scale = clamp(float(reframe.get("scale", 1)), .05, 10)
+                    target_aspect = float(scale) / float(height)
+                    crop_width = min(source_width, source_height * target_aspect)
+                    crop_height = min(source_height, source_width / target_aspect)
+                    crop_width = min(crop_width, crop_height * target_aspect)
+                    crop_height = min(crop_height, crop_width / target_aspect)
+                    visible_width = crop_width / reframe_scale
+                    visible_height = crop_height / reframe_scale
+                    focus_x = clamp(float(reframe.get("focus", {}).get("x", .5)), 0, 1)
+                    focus_y = clamp(float(reframe.get("focus", {}).get("y", .5)), 0, 1)
+                    max_offset_x = max(0.0, source_width - visible_width)
+                    max_offset_y = max(0.0, source_height - visible_height)
+                    crop_x = clamp(focus_x * max_offset_x, 0, max_offset_x)
+                    crop_y = clamp(focus_y * max_offset_y, 0, max_offset_y)
+                    crop_width = max(2.0, visible_width)
+                    crop_height = max(2.0, visible_height)
+                    chain = [
+                        f"crop=w='min(iw,trunc(max(2,{crop_width:.3f})/2)*2)':"
+                        f"h='min(ih,trunc(max(2,{crop_height:.3f})/2)*2)':"
+                        f"x='max(0,min(iw-ow,trunc(max(0,{crop_x:.3f})/2)*2))':"
+                        f"y='max(0,min(ih-oh,trunc(max(0,{crop_y:.3f})/2)*2))'",
+                        "setsar=1"
+                        f"scale={scale}:{height}:setsar=1"
+                    ]
+                except (TypeError, ValueError):
+                    chain = [f"scale={scale}:{height}:force_original_aspect_ratio=decrease", "setsar=1"]
+            else:
+                chain = [f"scale={scale}:{height}:force_original_aspect_ratio=decrease", "setsar=1"]
             scale_expr = keyframe_expr(clip, "scale", 1)
             position_expr = keyframe_expr(clip, "position", 0)
             rotation_expr = keyframe_expr(clip, "rotation", 0)
@@ -793,7 +829,7 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
                     f"scale=w='max(2,trunc(iw*({scale_expr}))/2)*2':"
                     f"h='max(2,trunc(ih*({scale_expr}))/2)*2':eval=frame"
                 )
-                chain.insert(0, f"scale={scale}:{height}:force_original_aspect_ratio=decrease")
+                chain.insert(1 if source_aspect and reframe.get("scale") else 0, f"scale={scale}:{height}:force_original_aspect_ratio=decrease")
             elif static_scale := clamp(float(transform.get("scale", 1)), .05, 10):
                 if static_scale != 1:
                     chain.append(f"scale=trunc(iw*{static_scale}/2)*2:trunc(ih*{static_scale}/2)*2")

@@ -8,6 +8,8 @@ export interface ExportPlanEntry {
   timelineStart: number
   duration: number
   trackId?: string
+  sourceWidth?: number | undefined
+  sourceHeight?: number | undefined
   transform?: TimelineClip['transform']
   text?: string
   volume?: number
@@ -51,6 +53,8 @@ export function clipToPlanEntry(project: Project, clip: TimelineClip): ExportPla
     sourceStart: clip.sourceStart,
     timelineStart: clip.timelineStart,
     duration: clip.duration,
+    sourceWidth: asset.width,
+    sourceHeight: asset.height,
     transform: clip.transform,
     volume: clip.volume
   }

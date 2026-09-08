@@ -80,6 +80,48 @@ describe('export plan', () => {
     expect(plan.music).toEqual([])
   })
 
+  it('carries source dimensions and reframe data to the renderer', () => {
+    const reframeProject: Project = {
+      ...project,
+      media: [{ ...project.media[0]!, kind: 'video', width: 1080, height: 1920 }],
+      timeline: {
+        ...project.timeline,
+        tracks: project.timeline.tracks.map((track) => track.kind !== 'video' ? track : {
+          ...track,
+          clips: track.clips.map((clip) => ({
+            ...clip,
+            transform: {
+              ...clip.transform,
+              scale: 3.16,
+              reframe: {
+                mode: 'auto',
+                targetAspect: 16 / 9,
+                scale: 3.16,
+                focus: { x: .2, y: .4 },
+                source: { width: 1080, height: 1920 }
+              }
+            }
+          }))
+        })
+      }
+    }
+    const plan = timelineToExportPlan(reframeProject)
+
+    expect(plan.video[0]).toMatchObject({
+      sourceWidth: 1080,
+      sourceHeight: 1920,
+      transform: {
+        scale: 3.16,
+        reframe: {
+          mode: 'auto',
+          scale: 3.16,
+          focus: { x: .2, y: .4 },
+          source: { width: 1080, height: 1920 }
+        }
+      }
+    })
+  })
+
   it('rejects clips with missing media', () => {
     const missing = {
       ...project,

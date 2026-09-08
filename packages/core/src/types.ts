@@ -33,6 +33,13 @@ export interface MediaTransform {
   brightness: number
   contrast: number
   saturation: number
+  reframe?: {
+    mode?: 'auto' | 'faceFocus' | undefined
+    targetAspect?: number | undefined
+    scale?: number | undefined
+    focus?: { x: number; y: number } | undefined
+    source?: { width: number; height: number } | undefined
+  } | undefined
 }
 
 export interface MediaAsset {

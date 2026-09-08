@@ -9,6 +9,9 @@ import {
   timelineToExportPlan,
   validateProject,
   sampleKeyframeTrack,
+  applyReframeTransform,
+  assetReframeDefaults,
+  faceFocusReframeConfig,
   type Command,
   type CommandHistoryEntry,
   type EffectKind,
@@ -34,7 +37,7 @@ import {
 
 type PlannerGoal = 'summary' | 'highlights' | 'tutorial'
 type ExportQuality = 'fast' | 'balanced' | 'quality'
-type DeliveryPresetId = 'short' | 'tutorial' | 'archive' | 'review'
+type DeliveryPresetId = 'short' | 'vertical' | 'tutorial' | 'archive' | 'review'
 type MetadataFormat = 'fcpxml' | 'jianying'
 type ClipDragMode = 'move' | 'trim-start' | 'trim-end'
 type WorkflowPresetId = DeliveryPresetId
@@ -303,6 +306,13 @@ const workflowTemplates: WorkflowTemplate[] = [
     detail: '30 秒 · 1080p · 30fps · 快速',
     plan: { goal: 'highlights', instruction: '高光 快节奏', strategyId: 'visual', candidateLimit: 96 },
     delivery: { targetSeconds: 30, width: 1920, height: 1080, frameRate: 30, quality: 'fast', ducking: true, exportName: 'exports/短视频.mp4' }
+  },
+  {
+    id: 'vertical',
+    label: '短视频竖屏',
+    detail: '30 秒 · 1080x1920 · 30fps · 快速',
+    plan: { goal: 'highlights', instruction: '高光 快节奏', strategyId: 'visual', candidateLimit: 96 },
+    delivery: { targetSeconds: 30, width: 1080, height: 1920, frameRate: 30, quality: 'fast', ducking: true, exportName: 'exports/短视频竖屏.mp4' }
   },
   {
     id: 'tutorial',
@@ -660,7 +670,15 @@ export function Workstation() {
   }, [previewSource.mode, previewTime, project.timeline.tracks])
 
   const activePreviewStyle = useMemo(() => {
-    if (!activeTimelineClip) return { transform: undefined, opacity: undefined, filter: undefined }
+    if (!activeTimelineClip) {
+      return {
+        transform: undefined,
+        opacity: undefined,
+        filter: undefined,
+        width: undefined,
+        height: undefined
+      }
+    }
     const localTime = previewTime - activeTimelineClip.timelineStart
     const sampled = new Map<EffectKind, number>()
     for (const track of activeTimelineClip.effects) {
@@ -679,12 +697,55 @@ export function Workstation() {
     if (contrast !== undefined) filters.push(`contrast(${contrast})`)
     const saturation = sampled.get('saturation')
     if (saturation !== undefined) filters.push(`saturate(${saturation})`)
+    const sourceWidth = previewAsset?.width ?? 1920
+    const sourceHeight = previewAsset?.height ?? 1080
+    const reframe = transform.reframe
+    const reframeScale = reframe?.scale ?? 1
+    const targetAspect = project.meta.width / Math.max(1, project.meta.height)
+    const sourceAspect = sourceWidth / Math.max(1, sourceHeight)
+    const base = Math.min(620, 620 / Math.min(1, sourceAspect / targetAspect))
+    const stageWidth = targetAspect >= 1 ? base : base * targetAspect
+    const stageHeight = targetAspect >= 1 ? base / targetAspect : base
+    const baseCropWidth = targetAspect > sourceAspect
+      ? sourceWidth
+      : sourceHeight * targetAspect
+    const baseCropHeight = targetAspect > sourceAspect
+      ? sourceWidth / targetAspect
+      : sourceHeight
+    const cropWidth = Math.min(sourceWidth, baseCropWidth) / Math.max(1, scale)
+    const cropHeight = Math.min(sourceHeight, baseCropHeight) / Math.max(1, scale)
+    const cropScaleX = sourceWidth / Math.max(1, cropWidth)
+    const cropScaleY = sourceHeight / Math.max(1, cropHeight)
+    const focusX = reframe?.focus?.x ?? .5
+    const focusY = reframe?.focus?.y ?? .5
+    const maxFocusX = Math.max(0, sourceWidth - baseCropWidth / reframeScale) / sourceWidth
+    const maxFocusY = Math.max(0, sourceHeight - baseCropHeight / reframeScale) / sourceHeight
+    const centerX = reframe
+      ? (baseCropWidth / reframeScale) / 2 + focusX * maxFocusX * sourceWidth
+      : sourceWidth / 2 + position / 100
+    const centerY = reframe
+      ? (baseCropHeight / reframeScale) / 2 + focusY * maxFocusY * sourceHeight
+      : sourceHeight / 2 + transform.y / 100
+    const cropLeft = centerX - cropWidth / 2
+    const cropTop = centerY - cropHeight / 2
+    const cropX = clamp(cropLeft / Math.max(1, sourceWidth - cropWidth), 0, 1)
+    const cropY = clamp(cropTop / Math.max(1, sourceHeight - cropHeight), 0, 1)
     return {
-      transform: `translate(${position}px, ${transform.y}px) rotate(${rotation}deg) scale(${scale})`,
+      transform: `translate(${(cropX - .5) * stageWidth}px, ${(cropY - .5) * stageHeight}px) ` +
+        `rotate(${rotation}deg) scale(${scale * Math.max(cropScaleX, cropScaleY)})`,
       opacity: clamp(opacity, 0, 1),
-      filter: filters.length > 0 ? filters.join(' ') : undefined
+      filter: filters.length > 0 ? filters.join(' ') : undefined,
+      width: `${stageWidth}px`,
+      height: `${stageHeight}px`
     }
-  }, [activeTimelineClip, previewTime])
+  }, [
+    activeTimelineClip,
+    previewAsset?.height,
+    previewAsset?.width,
+    previewTime,
+    project.meta.height,
+    project.meta.width
+  ])
 
   const speechByAsset = useMemo(() => {
     const result = new Map<string, SpeechSegment[]>()
@@ -1468,6 +1529,36 @@ export function Workstation() {
         : track)
       .filter((track) => track.keyframes.length > 0)
     changeSelectedClip({ effects }, '关键帧已删除')
+  }
+
+  function applySmartReframe(mode: 'auto' | 'faceFocus') {
+    if (!selectedClip) return
+    const asset = assetById.get(selectedClip.mediaId)
+    if (!asset) return
+    const defaults = assetReframeDefaults(asset, project.meta)
+    const sourceWidth = asset.width ?? 1920
+    const sourceHeight = asset.height ?? 1080
+    const faces = mode === 'faceFocus'
+      ? (visualByAsset.get(asset.id) ?? [])
+        .flatMap((signal) => signal.objects)
+        .filter((object) => object.name === '人脸')
+        .map((object) => {
+          const [x = 0, y = 0, width = 0, height = 0] = object.box ?? []
+          return {
+            x: (x + width / 2) / Math.max(1, sourceWidth),
+            y: (y + height / 2) / Math.max(1, sourceHeight),
+            width: width / Math.max(1, sourceWidth),
+            height: height / Math.max(1, sourceHeight)
+          }
+        })
+      : []
+    const config = faceFocusReframeConfig(defaults, faces)
+    const { transform } = applyReframeTransform(selectedClip, config)
+    if (mode === 'faceFocus' && faces.length === 0) {
+      changeSelectedClip({ transform }, '未检测到人脸，已按目标画幅适配')
+      return
+    }
+    changeSelectedClip({ transform }, mode === 'faceFocus' ? '已按人脸重构图' : '已按目标画幅重构图')
   }
 
   function toggleTrackState(track: Track, field: 'muted' | 'hidden' | 'locked') {
@@ -2557,6 +2648,23 @@ export function Workstation() {
                 <div><span>时间线</span><strong>{formatTime(selectedClip.timelineStart)}</strong></div>
                 <div><span>时长</span><strong>{selectedClip.duration.toFixed(2)}s</strong></div>
                 <div><span>源起点</span><strong>{selectedClip.sourceStart.toFixed(2)}s</strong></div>
+                <div className="reframe-panel">
+                  <strong>智能重构图</strong>
+                  <div className="move-grid">
+                    <button onClick={() => applySmartReframe('auto')}>画面适配</button>
+                    <button onClick={() => applySmartReframe('faceFocus')}>人脸焦点</button>
+                  </div>
+                  {selectedClip.transform.reframe ? (
+                    <span>
+                      {selectedClip.transform.reframe.mode === 'faceFocus' ? '人脸焦点' : '画面适配'} ·
+                      倍率 {selectedClip.transform.reframe.scale?.toFixed(2)} ·
+                      焦点 {((selectedClip.transform.reframe.focus?.x ?? .5) * 100).toFixed(0)}%,
+                      {((selectedClip.transform.reframe.focus?.y ?? .5) * 100).toFixed(0)}%
+                    </span>
+                  ) : (
+                    <span>未启用，变换仍可手动调整</span>
+                  )}
+                </div>
                 <label className="field">
                   <span>字幕文本</span>
                   <textarea

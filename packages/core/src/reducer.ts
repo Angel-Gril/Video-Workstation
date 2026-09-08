@@ -350,6 +350,9 @@ function apply(project: Project, command: Command): Project {
       if (typeof clipId !== 'string') throw new CommandError('Invalid clip id')
       const transform = command.payload.transform
       if (!isTransform(transform)) throw new CommandError('Invalid transform')
+      if (transform.reframe !== undefined && !isTransformReframe(transform.reframe)) {
+        throw new CommandError('Invalid reframe')
+      }
       const { clip, track } = clipOf(project, clipId)
       return replaceTrack(project, {
         ...track,
@@ -510,4 +513,28 @@ export function isTransform(value: unknown): value is TimelineClip['transform'] 
   return typeof value === 'object' && value !== null &&
     'scale' in value && 'x' in value && 'y' in value &&
     'rotation' in value && 'opacity' in value
+}
+
+export function isTransformReframe(value: unknown): value is NonNullable<TimelineClip['transform']['reframe']> {
+  if (typeof value !== 'object' || value === null) return false
+  const reframe = value as Record<string, unknown>
+  if (reframe.mode !== undefined && reframe.mode !== 'auto' && reframe.mode !== 'faceFocus') return false
+  const targetAspect = reframe.targetAspect
+  if (targetAspect !== undefined && (!Number.isFinite(Number(targetAspect)) || Number(targetAspect) <= 0)) return false
+  const scale = reframe.scale
+  if (scale !== undefined && (!Number.isFinite(Number(scale)) || Number(scale) <= 0)) return false
+  if (reframe.focus !== undefined) {
+    const focus = reframe.focus as Record<string, unknown>
+    const focusX = Number(focus.x)
+    const focusY = Number(focus.y)
+    if (!Number.isFinite(focusX) || !Number.isFinite(focusY)) return false
+  }
+  if (reframe.source !== undefined) {
+    const source = reframe.source as Record<string, unknown>
+    const sourceWidth = Number(source.width)
+    const sourceHeight = Number(source.height)
+    if (!Number.isFinite(sourceWidth) || sourceWidth <= 0 ||
+      !Number.isFinite(sourceHeight) || sourceHeight <= 0) return false
+  }
+  return true
 }
