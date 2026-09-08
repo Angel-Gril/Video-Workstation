@@ -79,6 +79,7 @@ export interface TimelineClip {
   audioProcessing?: {
     denoise?: number | undefined
     normalizeLoudness?: boolean | undefined
+    loudnessTarget?: number | undefined
     deess?: number | undefined
   } | undefined
   narration?: string | undefined

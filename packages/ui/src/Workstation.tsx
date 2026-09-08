@@ -2974,6 +2974,18 @@ export function Workstation() {
                     />
                     <span>响度归一化</span>
                   </label>
+                  <label className="field">
+                    <span>响度目标</span>
+                    <select
+                      aria-label="响度目标"
+                      value={String(selectedClip.audioProcessing?.loudnessTarget ?? -16)}
+                      onChange={(event) => updateSelectedAudioProcessing({ loudnessTarget: Number(event.target.value) })}
+                    >
+                      {[-14, -16, -23].map((target) => (
+                        <option key={target} value={target}>{target} LUFS</option>
+                      ))}
+                    </select>
+                  </label>
                   <label className="range">
                     <span>降噪</span>
                     <input

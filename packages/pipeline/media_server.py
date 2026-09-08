@@ -847,11 +847,16 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
         except (TypeError, ValueError):
             deess = 0
         normalize = bool(settings.get("normalizeLoudness", False))
+        try:
+            loudness_target = float(settings.get("loudnessTarget", -16))
+        except (TypeError, ValueError):
+            loudness_target = -16
+        loudness_target = clamp(loudness_target, -36, -6)
         if denoise > 0:
             noise = 0.01 + denoise * 0.07
             parts.append(f"afftdn=nr={noise:.3f}:nf=-25")
         if normalize:
-            parts.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+            parts.append(f"loudnorm=I={loudness_target:.1f}:TP=-1.5:LRA=11")
         if deess > 0:
             parts.append(
                 "highpass=f=6000,deesser=i=0.15:m=0.5:f=0.5,"

@@ -81,6 +81,10 @@ function validateClip(
         issues.push({ path: `${path}.audioProcessing.${key}`, message: 'Audio processing amount must be between 0 and 1' })
       }
     }
+    const loudnessTarget = clip.audioProcessing.loudnessTarget
+    if (loudnessTarget !== undefined && (!Number.isFinite(loudnessTarget) || loudnessTarget < -36 || loudnessTarget > -6)) {
+      issues.push({ path: `${path}.audioProcessing.loudnessTarget`, message: 'Loudness target must be between -36 and -6 LUFS' })
+    }
   }
   for (const [effectIndex, effect] of clip.effects.entries()) {
     for (const [keyIndex, keyframe] of effect.keyframes.entries()) {

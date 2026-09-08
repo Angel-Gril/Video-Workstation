@@ -35,7 +35,7 @@ const project: Project = {
             ]
           }],
           volume: 1
-          ,audioProcessing: { denoise: .35, normalizeLoudness: true, deess: .5 }
+          ,audioProcessing: { denoise: .35, normalizeLoudness: true, loudnessTarget: -14, deess: .5 }
         }],
         locked: false,
         muted: true,
@@ -75,7 +75,7 @@ describe('export plan', () => {
       muted: true
     })
     expect(plan.video[0]?.effects?.[0]?.keyframes[0]).toMatchObject({ time: 0, value: 1 })
-    expect(plan.video[0]?.audioProcessing).toEqual({ denoise: .35, normalizeLoudness: true, deess: .5 })
+    expect(plan.video[0]?.audioProcessing).toEqual({ denoise: .35, normalizeLoudness: true, loudnessTarget: -14, deess: .5 })
     expect(plan.caption[0]).toMatchObject({ text: '示例字幕' })
     expect(plan.music).toEqual([])
   })
