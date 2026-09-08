@@ -536,5 +536,18 @@ export function isTransformReframe(value: unknown): value is NonNullable<Timelin
     if (!Number.isFinite(sourceWidth) || sourceWidth <= 0 ||
       !Number.isFinite(sourceHeight) || sourceHeight <= 0) return false
   }
+  if (reframe.dynamic !== undefined) {
+    const dynamic = reframe.dynamic as Record<string, unknown>
+    const smoothing = Number(dynamic.smoothing)
+    if (smoothing !== undefined && (!Number.isFinite(smoothing) || smoothing < 0 || smoothing > 1)) return false
+    if (!Array.isArray(dynamic.points)) return false
+    for (const point of dynamic.points as unknown[]) {
+      if (typeof point !== 'object' || point === null) return false
+      const { time, x, y } = point as Record<string, unknown>
+      if (!Number.isFinite(Number(time)) || Number(time) < 0 ||
+        !Number.isFinite(Number(x)) || Number(x) < 0 || Number(x) > 1 ||
+        !Number.isFinite(Number(y)) || Number(y) < 0 || Number(y) > 1) return false
+    }
+  }
   return true
 }

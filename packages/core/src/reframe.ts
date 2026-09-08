@@ -6,6 +6,10 @@ export interface ReframeConfig {
   scale: number
   focus: { x: number; y: number }
   source?: { width: number; height: number }
+  dynamic?: {
+    points?: ReframeFocusPoint[] | undefined
+    smoothing?: number | undefined
+  } | undefined
 }
 
 export interface ReframeFace {
@@ -13,6 +17,12 @@ export interface ReframeFace {
   y: number
   width: number
   height: number
+}
+
+export interface ReframeFocusPoint {
+  time: number
+  x: number
+  y: number
 }
 
 export function assetReframeDefaults(
@@ -95,6 +105,50 @@ export function faceFocusReframeConfig(
     focus: {
       x: clampReframe(defaults.focus.x * (1 - weight) + faceX * weight, 0, 1),
       y: clampReframe(defaults.focus.y * (1 - weight) + faceY * weight, 0, 1)
+    }
+  }
+}
+
+export function focusPointAtTime(
+  points: ReframeFocusPoint[] | undefined,
+  time: number,
+  fallback = { x: .5, y: .5 }
+): { x: number; y: number } {
+  if (!points || points.length === 0) return fallback
+  const sorted = [...points].sort((a, b) => a.time - b.time)
+  const first = sorted[0]!
+  const last = sorted[sorted.length - 1]!
+  if (time <= first.time) return { x: first.x, y: first.y }
+  if (time >= last.time) return { x: last.x, y: last.y }
+  const nextIndex = sorted.findIndex((point) => point.time > time)
+  const previous = sorted[nextIndex - 1]!
+  const next = sorted[nextIndex]!
+  const progress = (time - previous.time) / Math.max(1e-6, next.time - previous.time)
+  return {
+    x: previous.x + (next.x - previous.x) * progress,
+    y: previous.y + (next.y - previous.y) * progress
+  }
+}
+
+export function dynamicFocusReframeConfig(
+  defaults: ReframeConfig,
+  samples: ReframeFace[][]
+): ReframeConfig {
+  const points = samples
+    .map((faces, index) => ({ faces, time: index / Math.max(1, samples.length - 1) }))
+    .filter((sample) => sample.faces.length > 0)
+    .map((sample) => {
+      const config = faceFocusReframeConfig(defaults, sample.faces)
+      return { time: Number(sample.time.toFixed(3)), x: config.focus.x, y: config.focus.y }
+    })
+  if (points.length === 0) return { ...defaults, mode: 'auto' }
+  return {
+    ...defaults,
+    mode: 'faceFocus',
+    focus: points[0]!,
+    dynamic: {
+      points,
+      smoothing: .45
     }
   }
 }

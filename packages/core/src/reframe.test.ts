@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   applyReframeTransform,
   assetReframeDefaults,
+  dynamicFocusReframeConfig,
   faceFocusReframeConfig
 } from './index'
 
@@ -58,5 +59,21 @@ describe('smart reframe', () => {
 
     expect(config.mode).toBe('auto')
     expect(config.focus).toEqual({ x: .5, y: .5 })
+  })
+
+  it('creates a dynamic focus path from per-frame samples', () => {
+    const defaults = assetReframeDefaults(
+      { width: 1920, height: 1080 },
+      { width: 1080, height: 1920 }
+    )
+    const config = dynamicFocusReframeConfig(defaults, [
+      [{ x: .2, y: .5, width: .1, height: .1 }],
+      [],
+      [{ x: .8, y: .4, width: .1, height: .1 }]
+    ])
+
+    expect(config.mode).toBe('faceFocus')
+    expect(config.dynamic?.points).toHaveLength(2)
+    expect(config.dynamic?.points?.[0]?.x).toBeLessThan(config.dynamic?.points?.[1]?.x ?? 0)
   })
 })

@@ -11,7 +11,9 @@ import {
   sampleKeyframeTrack,
   applyReframeTransform,
   assetReframeDefaults,
+  dynamicFocusReframeConfig,
   faceFocusReframeConfig,
+  focusPointAtTime,
   type Command,
   type CommandHistoryEntry,
   type EffectKind,
@@ -716,8 +718,9 @@ export function Workstation() {
     const cropHeight = Math.min(sourceHeight, baseCropHeight) / Math.max(1, scale)
     const cropScaleX = sourceWidth / Math.max(1, cropWidth)
     const cropScaleY = sourceHeight / Math.max(1, cropHeight)
-    const focusX = reframe?.focus?.x ?? .5
-    const focusY = reframe?.focus?.y ?? .5
+  const focus = focusPointAtTime(reframe?.dynamic?.points, localTime, reframe?.focus)
+  const focusX = focus.x
+  const focusY = focus.y
     const maxFocusX = Math.max(0, sourceWidth - baseCropWidth / reframeScale) / sourceWidth
     const maxFocusY = Math.max(0, sourceHeight - baseCropHeight / reframeScale) / sourceHeight
     const centerX = reframe
@@ -1552,13 +1555,53 @@ export function Workstation() {
           }
         })
       : []
-    const config = faceFocusReframeConfig(defaults, faces)
-    const { transform } = applyReframeTransform(selectedClip, config)
+    const staticConfig = faceFocusReframeConfig(defaults, faces)
+    const { transform } = applyReframeTransform(selectedClip, staticConfig)
     if (mode === 'faceFocus' && faces.length === 0) {
       changeSelectedClip({ transform }, '未检测到人脸，已按目标画幅适配')
       return
     }
     changeSelectedClip({ transform }, mode === 'faceFocus' ? '已按人脸重构图' : '已按目标画幅重构图')
+  }
+
+  async function applyDynamicFocusReframe() {
+    if (!selectedClip) return
+    const asset = assetById.get(selectedClip.mediaId)
+    if (!asset) return
+    try {
+      setAnalyzing(true)
+      setAnalysisLabel('正在采样焦点轨迹...')
+      const samples = Math.max(4, Math.min(10, Math.ceil(selectedClip.duration / 4)))
+      const response = await fetch(
+        `/api/analyze/focus-track?path=${encodeURIComponent(asset.path)}` +
+        `&start=${encodeURIComponent(selectedClip.sourceStart)}` +
+        `&duration=${encodeURIComponent(selectedClip.duration)}&samples=${samples}`
+      )
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error ?? '焦点轨迹采样失败')
+      const defaults = assetReframeDefaults(asset, project.meta)
+      const config = dynamicFocusReframeConfig(
+        defaults,
+        data.points.map((point: { x: number; y: number }) => ([{
+          x: point.x,
+          y: point.y,
+          width: .12,
+          height: .12
+        }]))
+      )
+      if (config.mode !== 'faceFocus') {
+        const { transform } = applyReframeTransform(selectedClip, defaults)
+        changeSelectedClip({ transform }, '未检测到焦点，已按目标画幅适配')
+        return
+      }
+      const { transform } = applyReframeTransform(selectedClip, config)
+      changeSelectedClip({ transform }, '已按焦点轨迹重构图')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '焦点轨迹采样失败')
+    } finally {
+      setAnalyzing(false)
+      setAnalysisLabel('')
+    }
   }
 
   function toggleTrackState(track: Track, field: 'muted' | 'hidden' | 'locked') {
@@ -2653,6 +2696,7 @@ export function Workstation() {
                   <div className="move-grid">
                     <button onClick={() => applySmartReframe('auto')}>画面适配</button>
                     <button onClick={() => applySmartReframe('faceFocus')}>人脸焦点</button>
+                    <button onClick={() => void applyDynamicFocusReframe()} disabled={analyzing}>焦点跟踪</button>
                   </div>
                   {selectedClip.transform.reframe ? (
                     <span>
@@ -2660,6 +2704,9 @@ export function Workstation() {
                       倍率 {selectedClip.transform.reframe.scale?.toFixed(2)} ·
                       焦点 {((selectedClip.transform.reframe.focus?.x ?? .5) * 100).toFixed(0)}%,
                       {((selectedClip.transform.reframe.focus?.y ?? .5) * 100).toFixed(0)}%
+                      {selectedClip.transform.reframe.dynamic?.points?.length
+                        ? ` · ${selectedClip.transform.reframe.dynamic.points.length} 个轨迹点`
+                        : ''}
                     </span>
                   ) : (
                     <span>未启用，变换仍可手动调整</span>

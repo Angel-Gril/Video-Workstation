@@ -89,6 +89,8 @@ def probe(path: Path) -> dict[str, Any]:
     streams = data.get("streams", [])
     video = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
     audio = next((stream for stream in streams if stream.get("codec_type") == "audio"), None)
+    video_index = streams.index(video) if video else None
+    audio_index = streams.index(audio) if audio else None
     duration = decimal(data.get("format", {}).get("duration"))
     if duration is None:
         duration = decimal(video.get("duration") if video else None)
@@ -106,6 +108,8 @@ def probe(path: Path) -> dict[str, Any]:
         "audioChannels": int(audio["channels"]) if audio and "channels" in audio else None,
         "audioSampleRate": int(audio["sample_rate"]) if audio and "sample_rate" in audio else None,
         "codec": video.get("codec_name") if video else audio.get("codec_name") if audio else None,
+        "videoStreamIndex": video_index,
+        "audioStreamIndex": audio_index,
     }
 
 

@@ -39,6 +39,10 @@ export interface MediaTransform {
     scale?: number | undefined
     focus?: { x: number; y: number } | undefined
     source?: { width: number; height: number } | undefined
+    dynamic?: {
+      points?: Array<{ time: number; x: number; y: number }> | undefined
+      smoothing?: number | undefined
+    } | undefined
   } | undefined
 }
 
@@ -54,6 +58,8 @@ export interface MediaAsset {
   audioChannels?: number | undefined
   audioSampleRate?: number | undefined
   codec?: string | undefined
+  videoStreamIndex?: number | undefined
+  audioStreamIndex?: number | undefined
 }
 
 export interface TimelineClip {

@@ -427,6 +427,55 @@ def visual_signals(path: Path, samples: int = 16) -> list[dict[str, Any]]:
     return signals
 
 
+def face_focus_track(
+    path: Path,
+    start: float,
+    duration: float,
+    samples: int = 8,
+) -> list[dict[str, float]]:
+    """Sample face positions across one timeline clip for a stable focus path."""
+    samples = max(2, min(12, int(samples)))
+    start = max(0.0, start)
+    duration = max(0.2, duration)
+    with tempfile.TemporaryDirectory(prefix="video-workstation-focus-") as folder:
+        folder_path = Path(folder)
+        pattern = folder_path / "focus-%03d.png"
+        command = [
+            ffmpeg_binary(), "-hide_banner", "-y",
+            "-ss", f"{start:.6f}", "-t", f"{duration:.6f}", "-i", str(path),
+            "-vf", f"fps={samples / duration:.6f},scale=240:-2",
+            "-frames:v", str(samples), str(pattern)
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
+        if result.returncode != 0:
+            raise PipelineError(result.stderr.strip()[-2000:] or "Focus sampling failed")
+        frames = sorted(folder_path.glob("focus-*.png"))
+        cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        points: list[dict[str, float]] = []
+        for index, file in enumerate(frames):
+            image = cv2.imread(str(file))
+            if image is None:
+                continue
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            height, width = gray.shape[:2]
+            faces = cascade.detectMultiScale(
+                gray,
+                scaleFactor=1.10,
+                minNeighbors=5,
+                minSize=(int(height * .07), int(height * .07)),
+            )
+            if len(faces) == 0:
+                continue
+            areas = [float(w * h) for _, _, w, h in faces]
+            x, y, face_width, face_height = faces[areas.index(max(areas))]
+            points.append({
+                "time": min(1.0, duration * index / max(1, samples - 1) / duration),
+                "x": round(((x + face_width / 2) / width), 5),
+                "y": round(((y + face_height / 2) / height), 5),
+            })
+        return points
+
+
 def whisper_model_instance():
     global whisper_model
     with whisper_lock:
@@ -741,6 +790,48 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
     def background_ducking_expression() -> str:
         return ducking_expression() if ducking_enabled else "1"
 
+    def reframe_focus_expression(clip: dict[str, Any], axis: str) -> str | None:
+        reframe = clip.get("transform", {}).get("reframe", {})
+        if not isinstance(reframe, dict):
+            return None
+        dynamic = reframe.get("dynamic", {})
+        if not isinstance(dynamic, dict):
+            return None
+        raw_points = dynamic.get("points", [])
+        if not isinstance(raw_points, list) or not raw_points:
+            return None
+        points: list[tuple[float, float]] = []
+        for item in raw_points:
+            if not isinstance(item, dict):
+                continue
+            try:
+                time = max(0.0, float(item.get("time", 0)))
+                value = clamp(float(item.get(axis, .5)), 0, 1)
+            except (TypeError, ValueError):
+                continue
+            points.append((time, value))
+        if not points:
+            return None
+        points.sort(key=lambda item: item[0])
+        parts: list[str] = []
+        for index, (start_time, start_value) in enumerate(points[:-1]):
+            end_time, end_value = points[index + 1]
+            if abs(end_time - start_time) < 1e-9:
+                continue
+            slope = (end_value - start_value) / (end_time - start_time)
+            value_at_start = start_value - slope * start_time
+            lower = f"gte(t,{start_time:.6f})" if start_time > 0 else None
+            upper = f"lte(t,{end_time:.6f})"
+            value = (
+                number_literal(start_value)
+                if abs(slope) < 1e-12
+                else f"{number_literal(value_at_start)}+(t)*{number_literal(slope)}"
+            )
+            parts.append(f"if({lower}*{upper},{value}," if lower else f"if({upper},{value},")
+        parts.append(number_literal(points[-1][1]))
+        parts.append(")" * max(0, len(points) - 1))
+        return "".join(parts)
+
     def audio_processing_chain(clip: dict[str, Any]) -> str:
         settings = clip.get("audioProcessing", {})
         if not isinstance(settings, dict):
@@ -766,6 +857,15 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
                 f"lowpass=f={6000 + int(deess * 6000)}"
             )
         return ",".join(parts)
+
+    def media_stream_selector(clip: dict[str, Any], kind: str) -> str:
+        explicit = clip.get(f"{kind}StreamIndex")
+        if explicit is not None:
+            try:
+                return str(int(explicit))
+            except (TypeError, ValueError):
+                pass
+        return f"0:{'v' if kind == 'video' else 'a'}"
 
     audio_mixin_inputs = audio_stream_inputs + independent_audio_inputs + music_audio_inputs
 
@@ -801,19 +901,27 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
                     visible_height = crop_height / reframe_scale
                     focus_x = clamp(float(reframe.get("focus", {}).get("x", .5)), 0, 1)
                     focus_y = clamp(float(reframe.get("focus", {}).get("y", .5)), 0, 1)
+                    dynamic_x = reframe_focus_expression(clip, "x")
+                    dynamic_y = reframe_focus_expression(clip, "y")
                     max_offset_x = max(0.0, source_width - visible_width)
                     max_offset_y = max(0.0, source_height - visible_height)
-                    crop_x = clamp(focus_x * max_offset_x, 0, max_offset_x)
-                    crop_y = clamp(focus_y * max_offset_y, 0, max_offset_y)
                     crop_width = max(2.0, visible_width)
                     crop_height = max(2.0, visible_height)
+                    def crop_position(axis: str) -> str:
+                        expression = dynamic_x if axis == "x" else dynamic_y
+                        focus = focus_x if axis == "x" else focus_y
+                        max_offset = max_offset_x if axis == "x" else max_offset_y
+                        value = clamp(focus * max_offset, 0, max_offset)
+                        return expression or number_literal(value)
+                    crop_x_expression = f"max(0,min(iw-ow,{crop_position('x')}*max(0,iw-ow)))"
+                    crop_y_expression = f"max(0,min(ih-oh,{crop_position('y')}*max(0,ih-oh)))"
                     chain = [
                         f"crop=w='min(iw,trunc(max(2,{crop_width:.3f})/2)*2)':"
                         f"h='min(ih,trunc(max(2,{crop_height:.3f})/2)*2)':"
-                        f"x='max(0,min(iw-ow,trunc(max(0,{crop_x:.3f})/2)*2))':"
-                        f"y='max(0,min(ih-oh,trunc(max(0,{crop_y:.3f})/2)*2))'",
-                        "setsar=1"
-                        f"scale={scale}:{height}:setsar=1"
+                        f"x='{escape_filter_commas(crop_x_expression)}':"
+                        f"y='{escape_filter_commas(crop_y_expression)}'",
+                        "setsar=1",
+                        f"scale={scale}:{height}"
                     ]
                 except (TypeError, ValueError):
                     chain = [f"scale={scale}:{height}:force_original_aspect_ratio=decrease", "setsar=1"]
@@ -899,7 +1007,7 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
                     chain.append(f"fade=t=in:st=0:d={fade_in}")
                 if fade_out > 0:
                     chain.append(f"fade=t=out:st={duration - fade_out:.9f}:d={fade_out}")
-            filters.append(f"[{index}:v]{','.join(chain)}[{clip_label}]")
+            filters.append(f"[{index}:{media_stream_selector(clip, 'video')}]{','.join(chain)}[{clip_label}]")
             position_x = position_expr or number_literal(clamp(float(transform.get("x", 0)), -4000, 4000))
             if position_expr:
                 position_x = keyframe_expr(
@@ -957,7 +1065,7 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
             clip_duration = max(0.0, float(clip.get("duration", 0)))
             source_chain = audio_processing_chain(clip)
             source_label = f"premix{index}"
-            source_selector = f"[{index}:a]"
+            source_selector = f"[{index}:{media_stream_selector(clip, 'audio')}]"
             if source_chain:
                 filters.append(f"{source_selector}{source_chain}[{source_label}]")
                 source_selector = f"[{source_label}]"
@@ -1200,6 +1308,13 @@ class MediaHandler(BaseHTTPRequestHandler):
                 path = self.resolve_path(query.get("path", ""))
                 samples = int(query.get("samples", "16"))
                 self.send_json(HTTPStatus.OK, {"signals": visual_signals(path, samples)})
+                return
+            if parsed.path == "/api/analyze/focus-track":
+                path = self.resolve_path(query.get("path", ""))
+                start = float(query.get("start", "0"))
+                duration = float(query.get("duration", "1"))
+                samples = int(query.get("samples", "8"))
+                self.send_json(HTTPStatus.OK, {"points": face_focus_track(path, start, duration, samples)})
                 return
             if parsed.path.startswith("/api/jobs/"):
                 job_id = parsed.path[len("/api/jobs/"):]

@@ -98,7 +98,14 @@ describe('export plan', () => {
                 targetAspect: 16 / 9,
                 scale: 3.16,
                 focus: { x: .2, y: .4 },
-                source: { width: 1080, height: 1920 }
+                source: { width: 1080, height: 1920 },
+                dynamic: {
+                  smoothing: .3,
+                  points: [
+                    { time: 0, x: .2, y: .4 },
+                    { time: 5, x: .8, y: .6 }
+                  ]
+                }
               }
             }
           }))
@@ -116,7 +123,14 @@ describe('export plan', () => {
           mode: 'auto',
           scale: 3.16,
           focus: { x: .2, y: .4 },
-          source: { width: 1080, height: 1920 }
+          source: { width: 1080, height: 1920 },
+          dynamic: {
+            smoothing: .3,
+            points: [
+              { time: 0, x: .2, y: .4 },
+              { time: 5, x: .8, y: .6 }
+            ]
+          }
         }
       }
     })
