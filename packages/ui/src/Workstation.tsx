@@ -345,6 +345,7 @@ export function Workstation() {
   const [future, setFuture] = useState<Command[]>([])
   const [plan, setPlan] = useState<NarrativePlan | null>(null)
   const [planStrategy, setPlanStrategy] = useState<PlanStrategy['id']>('balanced')
+  const [strategyAlternatives, setStrategyAlternatives] = useState<Partial<Record<PlanStrategy['id'], NarrativePlan>>>({})
   const [planGoal, setPlanGoal] = useState<PlannerGoal>('summary')
   const [planCandidateLimit, setPlanCandidateLimit] = useState(48)
   const [planWeights, setPlanWeights] = useState<PlanWeights>({})
@@ -1112,23 +1113,29 @@ export function Workstation() {
         transcript.push(...(speechCacheRef.current.get(asset.path) ?? []))
         scenes.push(...(sceneCacheRef.current.get(asset.path) ?? []))
       }
-      const generated = createNarrativePlan({
+      const plannerInput = {
         goal: planGoal,
         targetSeconds,
         transcript,
         scenes,
         visualSignals: visualSignals.length > 0 ? visualSignals : undefined,
         instruction: instruction.trim() || undefined
-      }, {
-        strategyId: planStrategy,
-        candidateLimit: planCandidateLimit,
-        weights: planWeights
-      })
+      }
+      const generatedByStrategy = Object.fromEntries(planStrategies.map((strategy) => [
+        strategy.id,
+        createNarrativePlan(plannerInput, {
+          strategyId: strategy.id,
+          candidateLimit: planCandidateLimit,
+          weights: planWeights
+        })
+      ])) as Record<PlanStrategy['id'], NarrativePlan>
+      const generated = generatedByStrategy[planStrategy] ?? generatedByStrategy.balanced!
       setPlan(generated)
+      setStrategyAlternatives(generatedByStrategy)
       setNarrationText(generated.segments.map((segment) => segment.narration).filter(Boolean).join('\n'))
       setReviewedSegmentIds(new Set())
       setMessage(generated.segments.length
-        ? `已生成 ${generated.segments.length} 个候选：${scenes.length} 个场景 / ${transcript.length} 段语音`
+        ? `已生成 ${planStrategies.length} 套策略候选；当前 ${generated.segments.length} 个候选：${scenes.length} 个场景 / ${transcript.length} 段语音`
         : '没有足够的候选片段，请检查素材或调整意图')
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '方案生成失败')
@@ -1139,17 +1146,11 @@ export function Workstation() {
   }
 
   function choosePlanStrategy(strategyId: PlanStrategy['id']) {
-    if (!plan) return
-    const regenerated = createNarrativePlan(plan.input, {
-      videoTrackId: plan.options.videoTrackId ?? 'track-video',
-      captionTrackId: plan.options.captionTrackId ?? 'track-caption',
-      strategyId,
-      candidateLimit: plan.options.candidateLimit ?? planCandidateLimit,
-      weights: plan.options.weights
-    })
-    setPlan(regenerated)
+    const alternative = strategyAlternatives[strategyId]
+    if (!alternative) return
+    setPlan(alternative)
     setPlanStrategy(strategyId)
-    setReviewedSegmentIds(new Set())
+    setReviewedSegmentIds(new Set(alternative.selectedIds))
   }
 
   function toggleSegment(segmentId: string, accepted: boolean) {
