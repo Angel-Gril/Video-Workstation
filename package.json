@@ -11,7 +11,8 @@
     "typecheck": "tsc --build",
     "test": "vitest run",
     "pipeline:media": "python packages/pipeline/media_probe.py",
-    "pipeline:export": "python packages/pipeline/exporter.py"
+    "pipeline:export": "python packages/pipeline/exporter.py",
+    "pipeline:mcp": "node packages/pipeline/mcp_server.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

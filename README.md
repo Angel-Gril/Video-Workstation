@@ -58,6 +58,17 @@ POST /api/agent/export         基于项目生成导出计划并提交异步渲�
 GET  /api/jobs/{jobId}         查询导出进度
 ```
 
+服务也内置 MCP stdio 适配器，供外部 Agent 宿主直接发现和调用以上能力：
+
+```bash
+npm run pipeline:mcp
+```
+
+工具名包括 `workstation_execute`、`workstation_plan`、`workstation_apply_plan`、
+`workstation_export`、`workstation_job`、`workstation_saved_project` 和
+`workstation_save_project`。`WORKSTATION_API_URL` 指向本地媒体服务实例；
+`WORKSTATION_MCP_TIMEOUT_MS` 控制长耗时分析的等待上限。
+
 `agent/plan` 请求使用 `mediaPath`、`goal`、`targetSeconds`、`instruction` 与可选
 `strategyId`；`agent/apply-plan` 建议把 plan 接口返回的 `plan` 和 `asset` 一起提交。
 `agent/execute` 与 `agent/export` 可以直接提供 `project`，省略时使用当前保存项目。
