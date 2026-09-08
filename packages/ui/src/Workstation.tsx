@@ -1479,17 +1479,35 @@ export function Workstation() {
   }
 
   function updateSelectedAudioProcessing(patch: NonNullable<TimelineClip['audioProcessing']>) {
-    if (!selectedClip) return
-    const current = selectedClip.audioProcessing ?? {}
-    const next = {
-      ...current,
-      ...patch
-    }
-    if (!next.denoise && !next.deess && !next.normalizeLoudness) {
-      changeSelectedClip({ audioProcessing: undefined }, '音频处理已关闭')
-      return
-    }
-    changeSelectedClip({ audioProcessing: next }, '音频处理已更新')
+    const primaryId = selectedClip?.id
+    if (!primaryId) return
+    const clips = allTimelineClips.filter((item) =>
+      selectedClipIdsRef.current.has(item.id) || item.id === primaryId
+    )
+    if (clips.length === 0) return
+    const nextById = new Map(clips.map((clip) => {
+      const next = { ...(clip.audioProcessing ?? {}), ...patch }
+      return [clip.id, next.denoise || next.deess || next.normalizeLoudness
+        ? { audioProcessing: next }
+        : { audioProcessing: undefined }]
+    }))
+    const commands = [...new Set(clips.map((clip) => clip.trackId))].map((trackId) => {
+      const track = project.timeline.tracks.find((item) => item.id === trackId)
+      if (!track) throw new Error('目标轨道不存在')
+      return {
+        id: uid('cmd-audio'),
+        kind: 'track.replaceClips' as const,
+        payload: {
+          trackId: track.id,
+          clips: track.clips.map((item) => ({ ...item, ...nextById.get(item.id) }))
+        }
+      }
+    })
+    const count = selectedClipIdsRef.current.size > 1 ? ` ${selectedClipIdsRef.current.size} 个片段的` : ''
+    const label = `已更新${count}音频处理`
+    const batch = batchCommand(project, commands, label)
+    dispatch(batch, updateMetaTime(applyCommand(project, batch)))
+    setMessage(label)
   }
 
   function updateEffectValue(value: number) {

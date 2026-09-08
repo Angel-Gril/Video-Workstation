@@ -28,11 +28,12 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from PIL import Image
 
+from agent_bridge import AgentBridgeError, call_bridge
 from media_probe import PipelineError, ffprobe_binary, media_kind, probe
 
 
 HOST = "127.0.0.1"
-PORT = 7350
+PORT = int(os.environ.get("WORKSTATION_PORT", "7350"))
 PROJECT_FILE = Path(".aiwork/current.aiwork.json")
 WHISPER_MODEL_NAME = "base"
 TTS_VOICE = os.environ.get("WORKSTATION_TTS_VOICE", "zh-CN-XiaoxiaoNeural")
@@ -1196,6 +1197,210 @@ def save_project_document(document: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "path": str(PROJECT_FILE.resolve().as_posix())}
 
 
+def run_agent_commands(document: dict[str, Any], commands: Any, label: Any, save: bool = False) -> dict[str, Any]:
+    project = document.get("project") if isinstance(document, dict) else None
+    if not isinstance(project, dict):
+        raise BadRequestError("A valid project document is required")
+    if not isinstance(commands, list):
+        raise BadRequestError("Agent commands must be an array")
+    if label is not None and not isinstance(label, str):
+        raise BadRequestError("Agent label must be a string")
+    try:
+        result = call_bridge({
+            "action": "execute",
+            "project": project,
+            "commands": commands,
+            "label": label or "Agent edit",
+        })
+    except AgentBridgeError as error:
+        raise BadRequestError(str(error)) from error
+    response = {
+        "project": result.get("project"),
+        "duration": result.get("duration", 0),
+        "issues": result.get("issues", []),
+        "inverse": result.get("inverse"),
+        "command": result.get("command"),
+        "appliedCommandIds": result.get("appliedCommandIds", []),
+    }
+    if save:
+        base = document if isinstance(document.get("history"), list) else (load_project_document() or {})
+        next_document = {
+            **base,
+            "format": "ai-video-workstation/1",
+            "project": result.get("project"),
+            "history": [*base.get("history", []), result.get("command")],
+            "future": [],
+        }
+        response["saved"] = save_project_document(next_document)
+    return response
+
+
+def agent_project(raw_project: Any) -> dict[str, Any]:
+    if isinstance(raw_project, dict):
+        return raw_project
+    document = load_project_document()
+    if not document or not isinstance(document.get("project"), dict):
+        raise BadRequestError("No saved project is available; provide a project")
+    return document["project"]
+
+
+def run_agent_plan(
+    media_path: Path,
+    asset_id: str,
+    goal: str,
+    target_seconds: Any,
+    instruction: Any,
+    strategy_id: Any,
+    candidate_limit: Any,
+) -> dict[str, Any]:
+    asset = probe(media_path)
+    asset["id"] = asset_id
+    try:
+        speech_result = speech_analysis(media_path, asset_id)
+        scene_result = scene_analysis(media_path, 0.28)
+        visual_signals_data: Any = visual_signals(
+            media_path,
+            max(8, min(24, round(asset["duration"] / 30))),
+        )
+    except PipelineError as error:
+        raise BadRequestError(str(error)) from error
+
+    speech = []
+    for segment in speech_result.get("segments", []):
+        if not isinstance(segment, dict):
+            continue
+        speech.append({**segment, "mediaId": asset_id})
+    scenes = []
+    for scene in scene_result.get("scenes", []):
+        if not isinstance(scene, dict):
+            continue
+        scenes.append({**scene, "mediaId": asset_id})
+    signals = []
+    raw_signals = visual_signals_data.get("signals", []) if isinstance(visual_signals_data, dict) else visual_signals_data
+    for signal in raw_signals:
+        if not isinstance(signal, dict):
+            continue
+        signals.append({**signal, "mediaId": asset_id})
+
+    try:
+        target = float(target_seconds)
+    except (TypeError, ValueError) as error:
+        raise BadRequestError("targetSeconds must be a number") from error
+    options: dict[str, Any] = {}
+    if strategy_id:
+        options["strategyId"] = str(strategy_id)
+    if isinstance(candidate_limit, (int, float)):
+        options["candidateLimit"] = int(candidate_limit)
+    try:
+        result = call_bridge({
+            "action": "plan",
+            "input": {
+                "goal": goal,
+                "targetSeconds": target,
+                "transcript": speech,
+                "scenes": scenes,
+                "visualSignals": signals,
+                "instruction": str(instruction or ""),
+            },
+            "options": options,
+        })
+    except AgentBridgeError as error:
+        raise BadRequestError(str(error)) from error
+    return {
+        "asset": asset,
+        "analysis": {
+            "speechCount": len(speech),
+            "sceneCount": len(scenes),
+            "visualSignalCount": len(signals),
+        },
+        **result,
+    }
+
+
+def run_agent_apply_plan(
+    raw_project: Any,
+    plan: Any,
+    asset: Any,
+    label: Any,
+    save: bool,
+    replace_tracks: bool = True,
+) -> dict[str, Any]:
+    if not isinstance(plan, dict) or not isinstance(plan.get("commands"), list):
+        raise BadRequestError("Agent plan with commands is required")
+    project = agent_project(raw_project)
+
+    def track_commands() -> list[dict[str, Any]]:
+        track_ids: list[str] = []
+        for item in plan["commands"]:
+            clip = item.get("payload", {}).get("clip", {}) if isinstance(item, dict) else {}
+            if isinstance(clip, dict) and clip.get("trackId"):
+                track_id = str(clip["trackId"])
+                if track_id not in track_ids:
+                    track_ids.append(track_id)
+        result: list[dict[str, Any]] = []
+        for track_id in track_ids:
+            existing = next((track for track in project.get("timeline", {}).get("tracks", [])
+                             if isinstance(track, dict) and track.get("id") == track_id), None)
+            kind = existing.get("kind") if existing else (
+                "caption" if "caption" in track_id
+                else "music" if "music" in track_id
+                else "audio" if "audio" in track_id
+                else "video"
+            )
+            if existing:
+                result.append({"id": f"agent-clear-{track_id}", "kind": "track.remove", "payload": {"trackId": track_id}})
+            result.append({
+                "id": f"agent-track-{track_id}",
+                "kind": "track.add",
+                "payload": {"track": {
+                    "id": track_id,
+                    "kind": kind,
+                    "clips": [],
+                    "locked": False,
+                    "muted": False,
+                    "hidden": False,
+                }},
+            })
+        return result
+
+    commands = (track_commands() + list(plan["commands"])) if replace_tracks else list(plan["commands"])
+    if isinstance(asset, dict) and asset.get("id"):
+        media_id = str(asset["id"])
+        known = project.get("media", [])
+        if not any(isinstance(item, dict) and item.get("id") == media_id for item in known):
+            commands.insert(0, {
+                "id": f"agent-import-{media_id}",
+                "kind": "media.add",
+                "payload": {"asset": asset},
+            })
+    return run_agent_commands({"project": project}, commands, label or "Agent applied plan", save)
+
+
+def run_agent_export_plan(raw_project: Any, output: Path) -> dict[str, Any]:
+    project = agent_project(raw_project)
+    try:
+        result = call_bridge({"action": "export-plan", "project": project})
+    except AgentBridgeError as error:
+        raise BadRequestError(str(error)) from error
+    export_plan = result.get("plan")
+    if not isinstance(export_plan, dict):
+        raise PipelineError("Agent bridge did not return a valid export plan")
+    job_id = uuid.uuid4().hex
+    with jobs_lock:
+        jobs[job_id] = {
+            "kind": "agent-export",
+            "status": "queued",
+            "progress": 0,
+            "output": str(output),
+        }
+    job_executor.submit(run_export_job, job_id, export_plan, output)
+    return {
+        "jobId": job_id,
+        **jobs[job_id],
+        "duration": result.get("duration", 0),
+    }
+
+
 class MediaHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         sys.stderr.write("%s - %s\n" % (self.address_string(), format % args))
@@ -1380,6 +1585,48 @@ class MediaHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/project":
                 self.send_json(HTTPStatus.OK, save_project_document(body))
+                return
+            if parsed.path == "/api/agent/execute":
+                save = bool(body.get("save", False))
+                self.send_json(HTTPStatus.OK, run_agent_commands(body, body.get("commands"), body.get("label"), save))
+                return
+            if parsed.path == "/api/agent/plan":
+                media_path = self.resolve_path(str(body.get("mediaPath", "")))
+                goal = str(body.get("goal", "summary"))
+                if goal not in ("summary", "highlights", "tutorial"):
+                    raise BadRequestError("Unsupported agent plan goal")
+                strategy_id = body.get("strategyId")
+                if strategy_id is not None and strategy_id not in ("balanced", "visual", "speech"):
+                    raise BadRequestError("Unsupported agent plan strategy")
+                plan = run_agent_plan(
+                    media_path,
+                    str(body.get("assetId") or f"media-{media_path.stem}"),
+                    goal,
+                    body.get("targetSeconds", 30),
+                    body.get("instruction", ""),
+                    strategy_id,
+                    body.get("candidateLimit"),
+                )
+                self.send_json(HTTPStatus.OK, plan)
+                return
+            if parsed.path == "/api/agent/apply-plan":
+                self.send_json(
+                    HTTPStatus.OK,
+                    run_agent_apply_plan(
+                        body.get("project"),
+                        body.get("plan"),
+                        body.get("asset"),
+                        body.get("label"),
+                        bool(body.get("save", False)),
+                        bool(body.get("replaceTracks", True)),
+                    ),
+                )
+                return
+            if parsed.path == "/api/agent/export":
+                output = Path(str(body.get("output", ""))).expanduser().resolve()
+                if output.suffix.lower() != ".mp4":
+                    raise BadRequestError("Only MP4 output is currently supported")
+                self.send_json(HTTPStatus.ACCEPTED, run_agent_export_plan(body.get("project"), output))
                 return
             if parsed.path == "/api/tts":
                 text = str(body.get("text", ""))
