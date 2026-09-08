@@ -433,6 +433,7 @@ export function Workstation() {
   const [stylePresets, setStylePresets] = useState<ClipStylePreset[]>([])
   const [stylePresetId, setStylePresetId] = useState('')
   const [stylePresetName, setStylePresetName] = useState('')
+  const [previewError, setPreviewError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
   const projectFileRef = useRef<HTMLInputElement | null>(null)
@@ -840,10 +841,38 @@ export function Workstation() {
   useEffect(() => {
     const video = previewRef.current
     if (!video || !previewAsset) return
-    if (Number.isFinite(video.duration) && Math.abs(video.currentTime - sourcePreviewTime) > 0.05) {
-      video.currentTime = sourcePreviewTime
+    if (previewSource.mode === 'timeline' && activeTimelineClip) {
+      const nextTime = clamp(
+        previewTime - activeTimelineClip.timelineStart + activeTimelineClip.sourceStart,
+        0,
+        Math.max(0, previewAsset.duration - 0.05)
+      )
+      const syncSource = () => {
+        if (Number.isFinite(video.duration) && Math.abs(video.currentTime - nextTime) > 0.05) {
+          video.currentTime = nextTime
+        }
+      }
+      if (video.readyState >= 1) syncSource()
+      else video.addEventListener('loadedmetadata', syncSource, { once: true })
+      return () => video.removeEventListener('loadedmetadata', syncSource)
     }
-  }, [previewAsset?.id, previewSource.mode, sourcePreviewTime])
+    if (previewSource.mode === 'media') {
+      const syncSource = () => {
+        if (Number.isFinite(video.duration) && Math.abs(video.currentTime - sourcePreviewTime) > 0.05) {
+          video.currentTime = sourcePreviewTime
+        }
+      }
+      if (video.readyState >= 1) syncSource()
+      else video.addEventListener('loadedmetadata', syncSource, { once: true })
+      return () => video.removeEventListener('loadedmetadata', syncSource)
+    }
+  }, [
+    activeTimelineClip,
+    previewAsset,
+    previewAsset?.id,
+    previewSource.mode,
+    sourcePreviewTime
+  ])
 
   function firstTrack(kind: TrackKind): Track | null {
     return project.timeline.tracks.find((track) => track.kind === kind && !track.locked) ??
@@ -2165,6 +2194,9 @@ export function Workstation() {
   }, [marquee, project.timeline.tracks, zoom])
 
   function handleClipPointerDown(event: React.PointerEvent, clip: TimelineClip, mode: ClipDragMode) {
+    setPreviewSource({ mode: 'timeline', mediaId: clip.mediaId })
+    setPreviewTime(clip.timelineStart)
+    setSelectedClipId(clip.id)
     const additive = event.shiftKey || event.ctrlKey || event.metaKey
     if (additive) {
       event.preventDefault()
@@ -2747,6 +2779,7 @@ export function Workstation() {
                   style={activePreviewStyle}
                   controls={false}
                   playsInline
+                  onError={() => setPreviewError('当前浏览器无法解码该素材，可尝试 Edge/Chrome 或先转码为 H.264 MP4')}
                   onTimeUpdate={(event) => {
                     const sourceTime = event.currentTarget.currentTime
                     if (previewSource.mode === 'timeline' && activeTimelineClip) {
@@ -2774,6 +2807,7 @@ export function Workstation() {
                   }}
                   onPlay={() => setPlaying(true)}
                   onPause={() => setPlaying(false)}
+                  onLoadedMetadata={() => setPreviewError(null)}
                 />
               ) : (
                 <div className="preview-placeholder">
@@ -2782,6 +2816,7 @@ export function Workstation() {
               )}
               {activeCaption ? <div className="caption-overlay">{activeCaption}</div> : null}
               {activeNarration ? <div className="narration-overlay">{activeNarration}</div> : null}
+              {previewError ? <div className="preview-error">{previewError}</div> : null}
             </div>
             <div className="transport">
               <button onClick={() => {
