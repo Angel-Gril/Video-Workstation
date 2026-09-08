@@ -469,6 +469,36 @@ h2 { font-size: 12px; color: #c9c9d1; font-weight: 600; }
 .timeline-clip.selected .clip-thumbnail-strip { opacity: .85; }
 .timeline-clip.dragging { z-index: 3; cursor: grabbing; }
 
+.clip-transition-marks {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.clip-transition-marks i {
+  width: 8px;
+  height: 100%;
+  background: linear-gradient(90deg, rgba(94, 197, 255, .22), rgba(94, 197, 255, .62));
+}
+
+.clip-transition-marks i:last-child {
+  background: linear-gradient(270deg, rgba(94, 197, 255, .22), rgba(94, 197, 255, .62));
+}
+
+.clip-keyframe-mark {
+  position: absolute;
+  top: 1px;
+  right: 10px;
+  color: #ffcf7a;
+  font-size: 8px;
+  line-height: 1;
+  pointer-events: none;
+  z-index: 2;
+}
+
 .clip-thumbnail-strip {
   position: absolute;
   inset: 0;

@@ -2706,6 +2706,23 @@ export function Workstation() {
                             onPointerDown={(event) => handleClipPointerDown(event, clip, 'move')}
                           >
                             <span>{clip.text ? clip.text : clip.narration ? clip.narration : formatTime(view.duration)}</span>
+                            {(clip.transitionIn && clip.transitionIn !== 'none') || (clip.transitionOut && clip.transitionOut !== 'none') ? (
+                              <span className="clip-transition-marks" aria-hidden="true">
+                                {clip.transitionIn && clip.transitionIn !== 'none' ? <i title={transitionLabel(clip.transitionIn)} /> : null}
+                                {clip.transitionOut && clip.transitionOut !== 'none' ? <i title={transitionLabel(clip.transitionOut)} /> : null}
+                              </span>
+                            ) : null}
+                            {clip.effects.some((effect) => effect.keyframes.length > 0) ? (
+                              <span
+                                className="clip-keyframe-mark"
+                                title={clip.effects
+                                  .filter((effect) => effect.keyframes.length > 0)
+                                  .map((effect) => `${effect.property} ${effect.keyframes.length} 帧`)
+                                  .join(' · ')}
+                              >
+                                ◆
+                              </span>
+                            ) : null}
                             {track.kind === 'video' && clipThumbnails(clip).length > 0 ? (
                               <div className="clip-thumbnail-strip">
                                 {clipThumbnails(clip).map((thumb) => (
