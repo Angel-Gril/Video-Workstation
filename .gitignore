@@ -25,6 +25,7 @@ debug-loaded.png
 .vite-multi-select-e2e.mjs
 .vite-visual-qa.mjs
 .vite-snap-e2e.mjs
+.vite-weights-e2e.mjs
 inspect-dom.mjs
 snap-debug.mjs
 snap-values.mjs
@@ -36,3 +37,4 @@ timeline-scrolled.png
 timeline-snap-debug.png
 timeline-snap.png
 timeline-waveforms.png
+workstation-weights.png
