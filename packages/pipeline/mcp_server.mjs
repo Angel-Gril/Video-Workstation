@@ -68,6 +68,27 @@ const tools = [
     inputSchema: { type: 'object', required: ['jobId'], properties: { jobId: { type: 'string' } } }
   },
   {
+    name: 'workstation_probe',
+    description: 'Probe a local media file and return duration, streams, and capability metadata.',
+    inputSchema: {
+      type: 'object',
+      required: ['path'],
+      properties: { path: { type: 'string' } }
+    }
+  },
+  {
+    name: 'workstation_preview_proxy',
+    description: 'Create a browser-compatible MP4 preview proxy while preserving the source for export.',
+    inputSchema: {
+      type: 'object',
+      required: ['path'],
+      properties: {
+        path: { type: 'string' },
+        save: { type: 'boolean', default: false }
+      }
+    }
+  },
+  {
     name: 'workstation_saved_project',
     description: 'Load the current saved workstation project document.',
     inputSchema: { type: 'object', properties: {} }
@@ -105,6 +126,15 @@ async function api(path, body, method = 'POST') {
   return value
 }
 
+async function createPreviewProxy(args) {
+  const result = await api('/api/media/preview-proxy', {
+    path: args.path,
+    save: Boolean(args.save)
+  })
+  if (!args.save) return result
+  return api('/api/project', undefined, 'GET')
+}
+
 function callTool(name, args = {}) {
   switch (name) {
     case 'workstation_execute': return api('/api/agent/execute', args)
@@ -112,6 +142,8 @@ function callTool(name, args = {}) {
     case 'workstation_apply_plan': return api('/api/agent/apply-plan', args)
     case 'workstation_export': return api('/api/agent/export', args)
     case 'workstation_job': return api(`/api/jobs/${encodeURIComponent(String(args.jobId))}`, undefined, 'GET')
+    case 'workstation_probe': return api('/api/media/probe', { path: args.path })
+    case 'workstation_preview_proxy': return createPreviewProxy(args)
     case 'workstation_saved_project': return api('/api/project', undefined, 'GET')
     case 'workstation_save_project': return api('/api/project', args.document)
     default: throw new Error(`Unknown tool: ${name}`)

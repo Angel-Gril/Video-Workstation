@@ -66,7 +66,9 @@ npm run pipeline:mcp
 
 工具名包括 `workstation_execute`、`workstation_plan`、`workstation_apply_plan`、
 `workstation_export`、`workstation_job`、`workstation_saved_project` 和
-`workstation_save_project`。`WORKSTATION_API_URL` 指向本地媒体服务实例；
+`workstation_save_project`、`workstation_probe` 和 `workstation_preview_proxy`。
+代理工具可在 `save: true` 时把生成的浏览器兼容路径写回当前项目素材。
+`WORKSTATION_API_URL` 指向本地媒体服务实例；
 `WORKSTATION_MCP_TIMEOUT_MS` 控制长耗时分析的等待上限。
 
 `agent/plan` 请求使用 `mediaPath`、`goal`、`targetSeconds`、`instruction` 与可选

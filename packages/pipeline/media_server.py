@@ -1468,6 +1468,37 @@ def agent_project(raw_project: Any) -> dict[str, Any]:
     return document["project"]
 
 
+def apply_preview_proxy_to_project(
+    document: dict[str, Any],
+    source_path: Path,
+    preview_path: str,
+    save: bool,
+) -> dict[str, Any]:
+    project = document.get("project") if isinstance(document, dict) else None
+    if not isinstance(project, dict):
+        raise BadRequestError("A saved project is required when save is enabled")
+    normalized_source = source_path.resolve().as_posix()
+    matching = [
+        asset for asset in project.get("media", [])
+        if isinstance(asset, dict) and Path(str(asset.get("path", ""))).resolve().as_posix() == normalized_source
+    ]
+    if not matching:
+        raise BadRequestError("Media asset is not present in the saved project")
+    updated_assets = [
+        {**asset, "previewPath": preview_path}
+        if isinstance(asset, dict) and Path(str(asset.get("path", ""))).resolve().as_posix() == normalized_source
+        else asset
+        for asset in project.get("media", [])
+    ]
+    next_document = {
+        **document,
+        "project": {**project, "media": updated_assets},
+    }
+    if save:
+        return {**save_project_document(next_document), "project": next_document["project"]}
+    return {"ok": True, "saved": False, "project": next_document["project"]}
+
+
 def run_agent_plan(
     media_path: Path,
     asset_id: str,
@@ -1783,7 +1814,16 @@ class MediaHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/media/preview-proxy":
                 path = self.resolve_path(str(body.get("path", "")))
-                self.send_json(HTTPStatus.OK, create_preview_proxy(path))
+                result = create_preview_proxy(path)
+                save = bool(body.get("save", False))
+                if save:
+                    result["project"] = apply_preview_proxy_to_project(
+                        load_project_document() or {},
+                        path,
+                        str(result["output"]),
+                        True,
+                    )
+                self.send_json(HTTPStatus.OK, result)
                 return
             if parsed.path == "/api/media/transcode":
                 source = self.resolve_path(str(body.get("source", "")))
