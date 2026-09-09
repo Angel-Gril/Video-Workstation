@@ -71,13 +71,7 @@ class ApiRequest:
     query: dict[str, str]
 
 
-VIDEO_EXPORT_FORMATS = {
-    ".mp4": {"video": "libx264", "audio": "aac"},
-    ".mov": {"video": "libx264", "audio": "aac"},
-    ".mkv": {"video": "libx264", "audio": "aac"},
-    ".webm": {"video": "libvpx-vp9", "audio": "libopus"},
-    ".m4v": {"video": "libx264", "audio": "aac"},
-}
+from export_formats import VIDEO_EXPORT_FORMATS, video_export_format_for
 
 
 def media_stream(path: Path, start: int, length: int) -> bytes:
@@ -834,7 +828,7 @@ def clamp(value: float, low: float, high: float) -> float:
 
 
 def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -> dict[str, Any]:
-    export_format = VIDEO_EXPORT_FORMATS.get(output.suffix.lower())
+    export_format = video_export_format_for(output)
     if not export_format:
         raise PipelineError(
             "Unsupported video export format; use mp4, m4v, mov, mkv, or webm"
@@ -1898,7 +1892,7 @@ class MediaHandler(BaseHTTPRequestHandler):
                 if not isinstance(plan, dict):
                     raise BadRequestError("Export plan is required")
                 output = Path(str(body.get("output", ""))).expanduser().resolve()
-                if output.suffix.lower() not in VIDEO_EXPORT_FORMATS:
+                if not video_export_format_for(output):
                     raise BadRequestError("Unsupported video export format; use mp4, m4v, mov, mkv, or webm")
                 job_id = uuid.uuid4().hex
                 with jobs_lock:

@@ -23,5 +23,7 @@ jobs:
         run: npm run typecheck
       - name: Unit tests
         run: npm test -- --run
+      - name: Pipeline tests
+        run: python -m unittest discover -s packages/pipeline -p "test_*.py"
       - name: Build
         run: npm run build

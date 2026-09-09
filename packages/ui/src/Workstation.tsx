@@ -46,6 +46,7 @@ type ExportQuality = 'fast' | 'balanced' | 'quality'
 type VideoExportFormat = 'mp4' | 'm4v' | 'mov' | 'mkv' | 'webm'
 type DeliveryPresetId = 'short' | 'vertical' | 'tutorial' | 'archive' | 'review'
 type MetadataFormat = 'fcpxml' | 'jianying'
+const videoExportExtensions = 'mp4|mov|m4v|mkv|webm'
 type BatchOutputPreset = {
   id: 'vertical' | 'square' | 'review'
   label: string
@@ -2444,7 +2445,10 @@ export function Workstation() {
         const asset = project.media.find((item) => item.id === clip?.mediaId)
         entry.hasAudio = asset?.audioChannels !== 0
       }
-      const basename = (exportName.trim() || 'exports/输出.mp4').replace(/\.(mp4|mov|m4v|mkv|webm)$/i, '')
+      const basename = (exportName.trim() || 'exports/输出.mp4').replace(
+        new RegExp(`\\.(${videoExportExtensions})$`, 'i'),
+        ''
+      )
       setExporting(true)
       for (const [index, preset] of batchOutputPresets.entries()) {
         setExportProgress(0)
@@ -2457,7 +2461,7 @@ export function Workstation() {
         const response = await fetch('/api/export', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ plan, output: `${basename}-${preset.suffix}.mp4` })
+          body: JSON.stringify({ plan, output: `${basename}-${preset.suffix}.${exportFormat}` })
         })
         const data = await response.json()
         if (!response.ok) throw new Error(data.error ?? '批量导出失败')
