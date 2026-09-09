@@ -104,8 +104,54 @@ describe('narrative planner', () => {
       brightness: 0.72,
       saturation: 0.58,
       detail: 0.81,
+      speechiness: 0,
+      musicLikelihood: 0.74,
       labels: []
     })
+    expect(plan.analysis.visualSignalCount).toBe(1)
+  })
+
+  it('ranks low-speech ambient scenes for mixed cuts', () => {
+    const input = {
+      goal: 'highlights' as const,
+      targetSeconds: 4,
+      transcript: [
+        { id: 'speech-1', mediaId: 'media-1', start: 0, end: 4, text: '密集讲解' },
+        { id: 'speech-2', mediaId: 'media-1', start: 5, end: 6.8, text: '短语音' }
+      ],
+      scenes: [
+        { mediaId: 'media-1', start: 0, end: 4, score: 0.62 },
+        { mediaId: 'media-1', start: 5, end: 9, score: 0.70 }
+      ],
+      visualSignals: [
+        {
+          mediaId: 'media-1',
+          start: 0,
+          end: 4,
+          brightness: .6,
+          saturation: .5,
+          motion: .2,
+          objects: [],
+          labels: ['自然风光']
+        },
+        {
+          mediaId: 'media-1',
+          start: 5,
+          end: 9,
+          brightness: .6,
+          saturation: .5,
+          motion: .75,
+          objects: [],
+          labels: ['自然风光']
+        }
+      ]
+    }
+
+    const mixedPlan = createNarrativePlan(input, { strategyId: 'mixed' })
+    const speechPlan = createNarrativePlan(input, { strategyId: 'speech' })
+    expect(mixedPlan.segments[0]?.source.start).toBe(5)
+    expect(mixedPlan.segments[0]?.reasons.join(' ')).toContain('疑似音乐/环境段')
+    expect(speechPlan.segments[0]?.source.start).toBe(0)
   })
 
   it('normalizes custom multi-objective weights and explains keyword evidence', () => {

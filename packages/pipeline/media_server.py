@@ -401,6 +401,7 @@ def visual_signals(path: Path, samples: int = 16) -> list[dict[str, Any]]:
         frames = sorted(folder_path.glob("probe-*.png"))
         signals: list[dict[str, Any]] = []
         previous_gray: np.ndarray | None = None
+        previous_hsv: np.ndarray | None = None
         face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         for index, file in enumerate(frames):
             image = cv2.imread(str(file))
@@ -418,6 +419,14 @@ def visual_signals(path: Path, samples: int = 16) -> list[dict[str, Any]]:
             if previous_gray is not None and previous_gray.shape == gray.shape:
                 motion = float(np.mean(np.abs(previous_gray.astype(np.int16) - gray.astype(np.int16)))) / 255
             previous_gray = gray
+            color_variance = float(np.mean([
+                np.var(hsv[:, :, channel]) for channel in range(3)
+            ]))
+            if previous_hsv is not None and previous_hsv.shape == hsv.shape:
+                motion += min(.45, float(np.mean(np.abs(
+                    previous_hsv[:, :, 1].astype(np.int16) - hsv[:, :, 1].astype(np.int16)
+                ))) / 255)
+            previous_hsv = hsv
             objects: list[dict[str, Any]] = []
             labels: list[str] = []
             faces = face_cascade.detectMultiScale(
@@ -472,6 +481,16 @@ def visual_signals(path: Path, samples: int = 16) -> list[dict[str, Any]]:
                     vertical_lines += 1
             if vertical_lines >= 3:
                 labels.append("建筑/结构")
+            if face_coverage >= .07:
+                labels.append("对话/人物")
+            if vegetation_ratio >= .22 or sky_ratio >= .25:
+                labels.append("自然风光")
+            if vertical_lines >= 3 and face_coverage < .04:
+                labels.append("建筑")
+            if color_variance >= 1050 and motion >= .05 and face_coverage < .05:
+                labels.append("音乐舞台")
+            if not (face_coverage >= .07 or vegetation_ratio >= .22 or sky_ratio >= .25 or vertical_lines >= 3) and motion >= .07:
+                labels.append("动态画面")
             if saturation >= .32:
                 labels.append("高饱和")
             elif saturation <= .08:
@@ -487,6 +506,7 @@ def visual_signals(path: Path, samples: int = 16) -> list[dict[str, Any]]:
                 "brightness": round(brightness, 5),
                 "saturation": round(saturation, 5),
                 "motion": round(min(1.0, motion * 2.2), 5),
+                "colorVariance": round(color_variance, 3),
                 "faceCoverage": round(face_coverage, 5),
                 "objects": objects,
                 "labels": labels,

@@ -22,6 +22,7 @@ export interface VisualSignal {
   brightness: number
   saturation: number
   motion: number
+  colorVariance?: number | undefined
   faceCoverage?: number | undefined
   objects: Array<{ name: string; score: number; box?: number[] | undefined }>
   labels?: string[] | undefined
@@ -61,15 +62,17 @@ export interface StorySegment {
 }
 
 export interface PlanFactor {
-  id: 'scene' | 'speech' | 'intent' | 'duration' | 'visual' | 'detail' | 'keyword'
+  id: 'scene' | 'speech' | 'intent' | 'duration' | 'visual' | 'detail' | 'keyword' | 'audio'
   label: string
   value: number
   weight: number
   detail: string
 }
 
+export type PlanStrategyId = 'balanced' | 'visual' | 'speech' | 'mixed'
+
 export interface PlanStrategy {
-  id: 'balanced' | 'visual' | 'speech'
+  id: PlanStrategyId
   label: string
   description: string
   weights: Record<PlanFactor['id'], number>
@@ -83,6 +86,7 @@ export interface PlanWeights {
   visual?: number | undefined
   detail?: number | undefined
   keyword?: number | undefined
+  audio?: number | undefined
 }
 
 export interface PlannerOptions {
@@ -126,6 +130,7 @@ export interface NarrativePlan {
   analysis: {
     sceneCount: number
     speechCount: number
+    visualSignalCount: number
     sourceDuration: number
   }
   input: PlannerInput

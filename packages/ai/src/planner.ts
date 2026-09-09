@@ -27,6 +27,8 @@ interface Candidate {
     brightness: number
     saturation: number
     detail: number
+    speechiness: number
+    musicLikelihood: number
     labels: string[]
   }
 }
@@ -36,19 +38,25 @@ export const planStrategies: PlanStrategy[] = [
     id: 'balanced',
     label: '均衡',
     description: '兼顾画面变化、语音密度、意图命中和片段节奏。',
-    weights: { scene: 0.24, speech: 0.20, intent: 0.15, duration: 0.10, visual: 0.13, detail: 0.08, keyword: 0.10 }
+    weights: { scene: 0.24, speech: 0.20, intent: 0.15, duration: 0.10, visual: 0.13, detail: 0.08, keyword: 0.10, audio: 0.03 }
   },
   {
     id: 'visual',
     label: '视觉优先',
     description: '优先保留画面变化明显的高能片段。',
-    weights: { scene: 0.30, speech: 0.10, intent: 0.10, duration: 0.10, visual: 0.21, detail: 0.10, keyword: 0.09 }
+    weights: { scene: 0.30, speech: 0.10, intent: 0.10, duration: 0.10, visual: 0.21, detail: 0.10, keyword: 0.09, audio: 0.05 }
   },
   {
     id: 'speech',
     label: '叙述优先',
     description: '优先保留完整、密集的讲解与关键语句。',
-    weights: { scene: 0.10, speech: 0.33, intent: 0.17, duration: 0.08, visual: 0.09, detail: 0.05, keyword: 0.18 }
+    weights: { scene: 0.10, speech: 0.33, intent: 0.17, duration: 0.08, visual: 0.09, detail: 0.05, keyword: 0.18, audio: 0.03 }
+  },
+  {
+    id: 'mixed',
+    label: '混剪优先',
+    description: '优先完整解说，同时保留音乐、自然环境等低语音高画面片段。',
+    weights: { scene: 0.22, speech: 0.16, intent: 0.14, duration: 0.08, visual: 0.18, detail: 0.08, keyword: 0.08, audio: 0.06 }
   }
 ]
 
@@ -116,6 +124,15 @@ function makeFactors(candidate: Candidate, weights: PlanStrategy['weights']): Pl
       detail: `场景标题线索：${candidate.titleKeywords.join('、')}`
     })
   }
+  factors.push({
+    id: 'audio',
+    label: '音频形态',
+    value: candidate.visual.musicLikelihood,
+    weight: weights.audio ?? 0,
+    detail: candidate.visual.musicLikelihood >= .62
+      ? `疑似音乐/环境段（语音覆盖 ${Math.round(candidate.visual.speechiness * 100)}%）`
+      : `语音覆盖 ${Math.round(candidate.visual.speechiness * 100)}%`
+  })
   return factors
 }
 
@@ -138,6 +155,9 @@ function makeReasons(candidate: Candidate, factors: PlanFactor[]): string[] {
     reasons.push(`场景关键词：${candidate.titleKeywords.join('、')}`)
   }
   if (candidate.durationScore < 0.25) reasons.push('片段过短或过长，建议先接受再手动裁剪')
+  if (candidate.visual.musicLikelihood >= .62) {
+    reasons.push(`疑似音乐/环境段：语音覆盖 ${Math.round(candidate.visual.speechiness * 100)}%，可保留为节奏或情绪衔接`)
+  }
   if (candidate.visualScore > 0) {
     reasons.push(candidate.visual.labels.length
       ? `画面线索：${candidate.visual.labels.join('、')}（运动 ${candidate.visual.motion.toFixed(2)}）`
@@ -160,6 +180,11 @@ function buildNarration(
     : goal === 'tutorial'
       ? `接下来看第 ${index + 1} 部分，`
       : `第 ${index + 1} 部分，`
+  if (!spoken && candidate.visual.musicLikelihood >= .62) {
+    return goal === 'highlights'
+      ? `第 ${index + 1} 段音乐或环境画面，用于情绪衔接。`
+      : `第 ${index + 1} 部分，用音乐或环境画面过渡。`
+  }
   if (!spoken) return `${lead}这一段画面变化明显，建议单独确认细节。`
   const compact = spoken.length > 38 ? `${spoken.slice(0, 37)}…` : spoken
   return `${lead}${focus ? `${focus}相关内容：` : ''}${compact}`
@@ -233,6 +258,29 @@ function candidateWindows(input: PlannerInput): Candidate[] {
           0
         ) / overlappingSignals.length, 0, 1)
         : 0
+      const windowSeconds = Math.max(.001, duration)
+      const transcriptSpeechiness = clampNumber(speechSeconds / windowSeconds, 0, 1)
+      const ambientSignals = overlappingSignals.filter((signal) =>
+        (signal.labels ?? []).some((label) =>
+          label === '自然/植被' || label === '自然风光' || label === '天空' || label === '静态'
+        )
+      ).length / Math.max(1, overlappingSignals.length)
+      const cueSpeechiness = clampNumber(
+        overlappingSignals.reduce((total, signal) => total + ((signal.labels ?? []).includes('对话') ? 1 : 0), 0) /
+        Math.max(1, overlappingSignals.length),
+        0,
+        1
+      )
+      const speechiness = overlappingSignals.length > 0 && input.transcript.length === 0
+        ? cueSpeechiness
+        : transcriptSpeechiness
+      const musicLikelihood = clampNumber(
+        (1 - speechiness) * .74 +
+        ambientSignals * .22 +
+        (overlappingSignals.some((signal) => (signal.labels ?? []).includes('音乐')) ? .08 : 0),
+        0,
+        1
+      )
       const labelCounts = new Map<string, number>()
       for (const signal of overlappingSignals) {
         for (const label of [...(signal.labels ?? []), ...signal.objects.map((item) => item.name)]) {
@@ -249,11 +297,11 @@ function candidateWindows(input: PlannerInput): Candidate[] {
         start: window.start,
         end: window.end,
         sceneScore: clampNumber(window.sceneScore, 0, 1),
-        speechScore: duration > 0 ? clampNumber(speechSeconds / duration, 0, 1) : 0,
+        speechScore: speechiness,
         intentScore: clampNumber(matchedKeywords.length * 0.42, 0, 1),
         durationScore: duration >= 2 && duration <= 25 ? 0.85 : duration < 2 ? 0.3 : 0.55,
         visualScore,
-        visual: { motion: visualScore, brightness, saturation, detail, labels },
+        visual: { motion: visualScore, brightness, saturation, detail, speechiness, musicLikelihood, labels },
         matchedKeywords,
         titleKeywords,
         overlapIds: speech.map((segment) => segment.id),
@@ -263,7 +311,7 @@ function candidateWindows(input: PlannerInput): Candidate[] {
     .sort((a, b) => a.start - b.start)
 }
 
-const weightIds: Array<PlanFactor['id']> = ['scene', 'speech', 'intent', 'duration', 'visual', 'detail', 'keyword']
+const weightIds: Array<PlanFactor['id']> = ['scene', 'speech', 'intent', 'duration', 'visual', 'detail', 'keyword', 'audio']
 
 function normalizedWeights(
   strategy: PlanStrategy['weights'],
@@ -487,6 +535,7 @@ export function createNarrativePlan(
     analysis: {
       sceneCount: input.scenes.length,
       speechCount: input.transcript.length,
+      visualSignalCount: (input.visualSignals ?? []).length,
       sourceDuration: Number(Math.max(
         0,
         ...[...input.scenes, ...input.transcript].map((item) => item.end)
