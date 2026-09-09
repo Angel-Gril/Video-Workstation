@@ -71,6 +71,15 @@ class ApiRequest:
     query: dict[str, str]
 
 
+VIDEO_EXPORT_FORMATS = {
+    ".mp4": {"video": "libx264", "audio": "aac"},
+    ".mov": {"video": "libx264", "audio": "aac"},
+    ".mkv": {"video": "libx264", "audio": "aac"},
+    ".webm": {"video": "libvpx-vp9", "audio": "libopus"},
+    ".m4v": {"video": "libx264", "audio": "aac"},
+}
+
+
 def media_stream(path: Path, start: int, length: int) -> bytes:
     with path.open("rb") as file:
         file.seek(start)
@@ -825,6 +834,11 @@ def clamp(value: float, low: float, high: float) -> float:
 
 
 def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -> dict[str, Any]:
+    export_format = VIDEO_EXPORT_FORMATS.get(output.suffix.lower())
+    if not export_format:
+        raise PipelineError(
+            "Unsupported video export format; use mp4, m4v, mov, mkv, or webm"
+        )
     video_clips = [clip for clip in plan.get("video", []) if clip.get("path")]
     audio_clips = [clip for clip in plan.get("audio", []) if clip.get("path")]
     music_clips = [clip for clip in plan.get("music", []) if clip.get("path")]
@@ -1253,7 +1267,8 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
         if caption_file:
             escaped = str(caption_file).replace("\\", "/").replace(":", "\\:")
             filters.append(
-                f"[{final_base}]scale={scale}:{height}:force_original_aspect_ratio=decrease,"
+                f"[{final_base}]format=yuv420p,"
+                f"scale={scale}:{height}:force_original_aspect_ratio=decrease,"
                 f"pad={scale}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,"
                 f"subtitles=filename='{escaped}':force_style='FontName=Arial,"
                 "FontSize=54,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
@@ -1261,7 +1276,8 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
             )
         else:
             filters.append(
-                f"[{final_base}]scale={scale}:{height}:force_original_aspect_ratio=decrease,"
+                f"[{final_base}]format=yuv420p,"
+                f"scale={scale}:{height}:force_original_aspect_ratio=decrease,"
                 f"pad={scale}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v]"
             )
         map_args.extend(["-map", "[v]"])
@@ -1344,11 +1360,28 @@ def export(plan: dict[str, Any], output: Path, on_progress: Any | None = None) -
                 f"dropout_transition=0[master];[master]{bus_chain or 'anull'}[a]"
             )
         map_args.extend(["-map", "[a]"])
+    video_bitrate_args: list[str] = []
+    video_preset_args: list[str] = []
+    if export_format["video"] == "libvpx-vp9":
+        # VP9 uses constrained quality rather than H.264 CRF.
+        vp9_cq = clamp(20 - round((20 - crf) * .72), 4, 63)
+        vp9_speed = "good" if preset in ("slow", "medium") else "realtime"
+        video_preset_args = ["-deadline", vp9_speed, "-cpu-used", "3"]
+        video_bitrate_args = ["-b:v", "0", "-crf", str(vp9_cq)]
+    else:
+        video_bitrate_args = ["-crf", str(crf)]
+
+    audio_args = (
+        ["-c:a", "libopus", "-b:a", "160k"]
+        if export_format["audio"] == "libopus"
+        else ["-c:a", "aac", "-b:a", "192k"]
+    )
+
     args.extend([
         "-filter_complex", ";".join(filters),
         *map_args,
-        "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
-        "-c:a", "aac", "-b:a", "192k", "-shortest", str(output)
+        "-c:v", export_format["video"], *video_preset_args, *video_bitrate_args,
+        *audio_args, "-shortest", str(output)
     ])
     output.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.Popen(
@@ -1865,8 +1898,8 @@ class MediaHandler(BaseHTTPRequestHandler):
                 if not isinstance(plan, dict):
                     raise BadRequestError("Export plan is required")
                 output = Path(str(body.get("output", ""))).expanduser().resolve()
-                if output.suffix.lower() != ".mp4":
-                    raise BadRequestError("Only MP4 output is currently supported")
+                if output.suffix.lower() not in VIDEO_EXPORT_FORMATS:
+                    raise BadRequestError("Unsupported video export format; use mp4, m4v, mov, mkv, or webm")
                 job_id = uuid.uuid4().hex
                 with jobs_lock:
                     jobs[job_id] = {
@@ -1919,8 +1952,8 @@ class MediaHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/agent/export":
                 output = Path(str(body.get("output", ""))).expanduser().resolve()
-                if output.suffix.lower() != ".mp4":
-                    raise BadRequestError("Only MP4 output is currently supported")
+                if output.suffix.lower() not in VIDEO_EXPORT_FORMATS:
+                    raise BadRequestError("Unsupported video export format; use mp4, m4v, mov, mkv, or webm")
                 self.send_json(HTTPStatus.ACCEPTED, run_agent_export_plan(body.get("project"), output))
                 return
             if parsed.path == "/api/tts":

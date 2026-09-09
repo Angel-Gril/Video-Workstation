@@ -26,6 +26,7 @@ debug-loaded.png
 .vite-visual-qa.mjs
 .vite-snap-e2e.mjs
 .vite-weights-e2e.mjs
+.vite-format-export-e2e.mjs
 inspect-dom.mjs
 snap-debug.mjs
 snap-values.mjs

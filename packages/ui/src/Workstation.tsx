@@ -43,6 +43,7 @@ import {
 
 type PlannerGoal = 'summary' | 'highlights' | 'tutorial'
 type ExportQuality = 'fast' | 'balanced' | 'quality'
+type VideoExportFormat = 'mp4' | 'm4v' | 'mov' | 'mkv' | 'webm'
 type DeliveryPresetId = 'short' | 'vertical' | 'tutorial' | 'archive' | 'review'
 type MetadataFormat = 'fcpxml' | 'jianying'
 type BatchOutputPreset = {
@@ -341,7 +342,8 @@ const weightLabels: Record<keyof PlanWeights, string> = {
   duration: '片段节奏',
   visual: '画面信号',
   detail: '画面细节',
-  keyword: '标题关键词'
+  keyword: '标题关键词',
+  audio: '音频形态'
 }
 
 const workflowTemplates: WorkflowTemplate[] = [
@@ -438,6 +440,7 @@ export function Workstation() {
   const [exporting, setExporting] = useState(false)
   const [exportProgress, setExportProgress] = useState<number | null>(null)
   const [exportQuality, setExportQuality] = useState<ExportQuality>('balanced')
+  const [exportFormat, setExportFormat] = useState<VideoExportFormat>('mp4')
   const [exportName, setExportName] = useState('exports/输出.mp4')
   const [batchExportProgress, setBatchExportProgress] = useState<string | null>(null)
   const [selectedEffect, setSelectedEffect] = useState<EffectKind>('opacity')
@@ -2374,7 +2377,7 @@ export function Workstation() {
       .catch((error) => setMessage(error instanceof Error ? error.message : '项目打开失败'))
   }
 
-  async function exportProject(format: 'mp4' | MetadataFormat = 'mp4') {
+  async function exportProject(format: VideoExportFormat | MetadataFormat = 'mp4') {
     try {
       const issues = validateProject(project)
       if (issues.length > 0) throw new Error(issues[0]!.message)
@@ -2389,15 +2392,16 @@ export function Workstation() {
       }
       setExporting(true)
       setExportProgress(0)
-      const endpoint = format === 'mp4' ? '/api/export' : '/api/export/metadata'
+      const isVideo = format !== 'fcpxml' && format !== 'jianying'
+      const endpoint = isVideo ? '/api/export' : '/api/export/metadata'
       const requested = exportName.trim() || `exports/${Date.now()}.${format}`
-      const output = format === 'mp4'
+      const output = isVideo
         ? requested
         : `${requested.replace(/\.(mp4|fcpxml|json)$/i, '')}.${format === 'fcpxml' ? 'fcpxml' : 'json'}`
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(format === 'mp4'
+        body: JSON.stringify(isVideo
           ? {
             plan: { ...exportPlan, quality: exportQualityMap[exportQuality] },
             output
@@ -2440,7 +2444,7 @@ export function Workstation() {
         const asset = project.media.find((item) => item.id === clip?.mediaId)
         entry.hasAudio = asset?.audioChannels !== 0
       }
-      const basename = (exportName.trim() || 'exports/输出.mp4').replace(/\.mp4$/i, '')
+      const basename = (exportName.trim() || 'exports/输出.mp4').replace(/\.(mp4|mov|m4v|mkv|webm)$/i, '')
       setExporting(true)
       for (const [index, preset] of batchOutputPresets.entries()) {
         setExportProgress(0)
@@ -3570,6 +3574,16 @@ export function Workstation() {
                 <option value="quality">高画质</option>
               </select>
             </label>
+            <label className="field">
+              <span>视频格式</span>
+              <select value={exportFormat} onChange={(event) => setExportFormat(event.target.value as VideoExportFormat)}>
+                <option value="mp4">MP4</option>
+                <option value="mov">MOV</option>
+                <option value="m4v">M4V</option>
+                <option value="mkv">MKV</option>
+                <option value="webm">WebM</option>
+              </select>
+            </label>
             <div className="setting-grid">
               <label className="field">
                 <span>分辨率</span>
@@ -3647,7 +3661,9 @@ export function Workstation() {
               ) : null}
             </div>
             <div className="export-grid">
-              <button onClick={() => void exportProject('mp4')} disabled={exporting || serviceOnline === false}>MP4</button>
+              <button onClick={() => void exportProject(exportFormat)} disabled={exporting || serviceOnline === false}>
+                {exportFormat.toUpperCase()}
+              </button>
               <button onClick={() => void exportBatch()} disabled={exporting || serviceOnline === false}>
                 {batchExportProgress ?? '批量'}
               </button>
