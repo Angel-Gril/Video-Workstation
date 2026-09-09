@@ -32,7 +32,7 @@ const tools = [
         goal: { type: 'string', enum: ['summary', 'highlights', 'tutorial'], default: 'summary' },
         targetSeconds: { type: 'number', default: 30 },
         instruction: { type: 'string' },
-        strategyId: { type: 'string', enum: ['balanced', 'visual', 'speech'] },
+        strategyId: { type: 'string', enum: ['balanced', 'visual', 'speech', 'mixed'] },
         candidateLimit: { type: 'integer', minimum: 6, maximum: 240 }
       }
     }

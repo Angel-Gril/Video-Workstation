@@ -1891,7 +1891,7 @@ class MediaHandler(BaseHTTPRequestHandler):
                 if goal not in ("summary", "highlights", "tutorial"):
                     raise BadRequestError("Unsupported agent plan goal")
                 strategy_id = body.get("strategyId")
-                if strategy_id is not None and strategy_id not in ("balanced", "visual", "speech"):
+                if strategy_id is not None and strategy_id not in ("balanced", "visual", "speech", "mixed"):
                     raise BadRequestError("Unsupported agent plan strategy")
                 plan = run_agent_plan(
                     media_path,
